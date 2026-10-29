@@ -37,6 +37,7 @@
       <a href="#inicio" data-v="inicio"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg>Inicio</a>
       <a href="#facturas" data-v="facturas"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>Facturas</a>
       <a href="#cups" data-v="cups"><svg viewBox="0 0 24 24"><path d="M7 21V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v16M5 21h13M16 9h2a1 1 0 0 1 1 1v6a1.5 1.5 0 0 0 3 0V8l-2-2M12 7l-2 4h3l-2 4"/></svg>CUPS</a>
+      <a href="#comparativa" data-v="comparativa"><svg viewBox="0 0 24 24"><path d="M12 4v16M5 8h14M5 8l-3 7a3 3 0 0 0 6 0zM19 8l-3 7a3 3 0 0 0 6 0zM8 20h8"/></svg>Comparativa</a>
       <a href="#cruce" data-v="cruce"><svg viewBox="0 0 24 24"><path d="M4 7h11l-3-3M20 17H9l3 3"/></svg>Cruce sistema técnico<span class="pill">Pronto</span></a>
       <div class="sep"></div>
       <a href="#correcciones" data-v="correcciones"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></svg>Correcciones</a>
@@ -86,6 +87,11 @@
           <div class="card tile"><span class="lbl">Coste medio<button class="info" type="button" aria-label="Qué significa" data-info="Importe sin IVA dividido entre los kWh: el precio medio real de cada kWh, incluyendo energía, potencia, alquileres e impuesto eléctrico. Si sube, la luz sale más cara.">i</button></span><b id="kEurKwh">—</b><span class="muted sm">€/kWh sin IVA</span></div>
           <div class="card tile"><span class="lbl">CUPS facturados<button class="info" type="button" aria-label="Qué significa" data-info="Puntos de suministro (CUPS) con consumo en el periodo. Un mismo CUPS puede alimentar varios puntos de recarga.">i</button></span><b id="kPuntos">—</b><span class="muted sm" id="kFacturas"></span></div>
           <div class="card tile"><span class="lbl">Exceso de potencia<button class="info" type="button" aria-label="Qué significa" data-info="Penalización por superar la potencia contratada (por ejemplo, varios coches cargando a la vez). Es dinero evitable ajustando la potencia de esos CUPS o limitando la carga simultánea.">i</button></span><b id="kExceso">—</b><span class="muted sm" id="kExcesoSub"></span></div>
+        </div>
+
+        <div class="card comp-mini hide" id="cardComp">
+          <div class="card-h"><h3>Contraste con el analítico del equipo<button class="info" type="button" aria-label="Qué significa" data-info="Compara lo que sale de las facturas con el Excel que monta el equipo a mano, solo en los meses que hay en ambos. Por mes de consumo. Si la desviación es grande, conviene revisar ese mes en la sección Comparativa.">i</button></h3><a href="#comparativa" class="link sm">Ver comparativa →</a></div>
+          <div class="comp-stats" id="compStats"></div>
         </div>
 
         <div class="grid g2-1">
@@ -153,6 +159,40 @@
           <button class="btn" id="pExport">Exportar Excel</button>
         </div>
         <div class="tbl-wrap big"><table class="tbl" id="tbPuntos"></table></div>
+      </div>
+    </section>
+
+    <!-- ---------- COMPARATIVA ---------- -->
+    <section class="vista hide" id="v-comparativa">
+      <div class="grid g2-1 g-top">
+        <div class="card">
+          <div class="card-h">
+            <h3>Facturas vs. analítico del equipo<button class="info" type="button" aria-label="Qué significa" data-info="Las barras azules salen de las facturas de Endesa cargadas aquí; las naranjas, del Excel del equipo. Siempre por mes de consumo. Los meses sin factura todavía no son comparables.">i</button></h3>
+            <div class="seg" id="segComp" role="group" aria-label="Segmento">
+              <button data-s="TOTAL" class="on">Total</button><button data-s="BT">BT</button><button data-s="MT">MT</button>
+            </div>
+          </div>
+          <div id="compVacio" class="empty-mini hide"></div>
+          <div id="compCuerpo">
+            <div class="comp-stats" id="compKpis"></div>
+            <div class="leyenda"><span><i class="sw1"></i>Facturas</span><span><i class="sw2"></i>Analítico del equipo</span></div>
+            <div class="chart" id="chComp"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>Analítico del equipo</h3></div>
+          <div class="stack">
+            <div id="anaEstado" class="muted"></div>
+            <label class="btn pri">Subir Excel del equipo<input id="anaFile" type="file" accept=".xlsx,.xlsm,.xls" hidden></label>
+            <p class="note">Es el Excel «Costes por BT y MT» (consumo mensual y CV / RevShare / CF por BT y MT). Se guarda aparte de las facturas y, si subes otro del mismo año, la comparativa usa el más reciente.</p>
+            <div class="tbl-wrap"><table class="tbl" id="tbAna"></table></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Detalle por mes</h3><span class="muted sm" id="compSeg"></span></div>
+        <div class="tbl-wrap"><table class="tbl" id="tbComp"></table></div>
+        <p class="note"><b>Cómo se compara.</b> Consumo: kWh facturados por mes de consumo. <b>CV</b> se compara con el término de energía de las facturas (€/kWh); <b>CF</b>, con potencia contratada + alquiler de equipos (€/kWh); el <b>total</b> de las facturas incluye todo sin IVA (también excesos, impuesto eléctrico y otros conceptos) y se compara con CV + CF del equipo. El <b>RevShare</b> no aparece en las facturas de Endesa. <b>BT/MT</b>: en las facturas se separa por la tarifa real (6.x = MT, el resto BT); el equipo lo reparte con un porcentaje fijo.</p>
       </div>
     </section>
 

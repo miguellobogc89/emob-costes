@@ -213,6 +213,7 @@ async function cargarDashboard() {
   if (pedido !== JSON.stringify(args())) return;      // el usuario cambió el filtro mientras cargaba
   if (!d) return;
   DASH = d;
+  if (!d.vacio) cargarCompMini(); else $('#cardComp').classList.add('hide');
   $('#vacio').classList.toggle('hide', !d.vacio);
   $('#dash').classList.toggle('hide', !!d.vacio);
   if (!d.vacio) pintarDashboard();
@@ -441,6 +442,171 @@ async function exportarPuntos() {
   descargar(hoja(aoa, P_COLS.map((c, i) => (c[2] === 'f' ? i : -1)).filter((i) => i >= 0)), 'CUPS', `cups_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
+// ---------------------------------------------------------------- COMPARATIVA (analítico del equipo)
+function groupedChart(el, data, { fmtAxis = fComp, tipFn }) {
+  const vals = data.flatMap((d) => [d.a, d.b]).filter((v) => v != null);
+  const { svg, W, H, m, y } = frame(el, vals.length ? vals : [0], fmtAxis);
+  const band = (W - m.l - m.r) / data.length, bw = Math.min(14, band * 0.32);
+  const barra = (x0, v, cls) => {
+    if (v == null || v === 0) return null;
+    const ya = y(Math.max(0, v)), yb = y(Math.min(0, v)), h = Math.max(1, yb - ya), r = Math.min(4, h / 2, bw / 2), x1 = x0 + bw;
+    const d = v > 0 ? `M${x0},${yb} V${ya + r} Q${x0},${ya} ${x0 + r},${ya} H${x1 - r} Q${x1},${ya} ${x1},${ya + r} V${yb} Z`
+      : `M${x0},${ya} V${yb - r} Q${x0},${yb} ${x0 + r},${yb} H${x1 - r} Q${x1},${yb} ${x1},${yb - r} V${ya} Z`;
+    const p = svgEl('path', { d, class: cls }); svg.append(p); return p;
+  };
+  data.forEach((d, i) => {
+    const cx = m.l + band * i + band / 2;
+    const lx = svgEl('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }); lx.textContent = d.label; svg.append(lx);
+    const pa = barra(cx - bw - 1, d.a, 'bar'), pb = barra(cx + 1, d.b, 'bar2');   // 2px de aire entre las dos
+    const hit = svgEl('rect', { x: cx - band / 2, y: m.t, width: band, height: H - m.t - m.b, fill: 'transparent' });
+    hit.addEventListener('mousemove', (e) => { el.classList.add('hovering'); pa?.classList.add('hl'); pb?.classList.add('hl'); showTip(e, tipFn(d)); });
+    hit.addEventListener('mouseleave', () => { el.classList.remove('hovering'); pa?.classList.remove('hl'); pb?.classList.remove('hl'); hideTip(); });
+    svg.append(hit);
+  });
+}
+
+let COMP = null; ST.seg = 'TOTAL';
+const pct = (a, b) => (a == null || b == null || !b ? null : (a - b) / Math.abs(b) * 100);
+const fPct = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${fN(v, 1)} %`);
+const desv = (v, umbral = 10) => `<span class="desv ${v != null && Math.abs(v) > umbral ? 'alta' : ''}">${fPct(v)}</span>`;
+
+/** Une lo del equipo y lo de las facturas por mes para un segmento (TOTAL/BT/MT). */
+function calcComp(d, seg) {
+  const E = {};   // E[seg][concepto][mes]
+  for (const v of d.equipo) ((E[v.seg] ??= {})[v.concepto] ??= {})[v.mes] = +v.valor;
+  const F = {};   // F[mes] = {kwh, energia, fijo, neto, facturas}
+  for (const n of d.nuestro) {
+    if (seg !== 'TOTAL' && n.seg !== seg) continue;
+    const f = (F[n.mes] ??= { kwh: 0, energia: 0, fijo: 0, neto: 0, facturas: 0 });
+    for (const k of ['kwh', 'energia', 'fijo', 'neto', 'facturas']) f[k] += +n[k] || 0;
+  }
+  const eq = (concepto, mes) => {
+    if (seg !== 'TOTAL') return E[seg]?.[concepto]?.[mes] ?? null;
+    if (concepto === 'consumo') return E.TOTAL?.consumo?.[mes] ?? null;
+    // total: media de BT y MT ponderada por su consumo
+    let num = 0, den = 0;
+    for (const s of ['BT', 'MT']) { const v = E[s]?.[concepto]?.[mes], k = E[s]?.consumo?.[mes]; if (v != null && k) { num += v * k; den += k; } }
+    return den ? num / den : null;
+  };
+  const meses = [];
+  for (let mes = 1; mes <= 12; mes++) {
+    const f = F[mes]; const kF = f && f.kwh ? f.kwh : null; const kE = eq('consumo', mes);
+    const cv = eq('cv', mes), cf = eq('cf', mes), rs = eq('revshare', mes);
+    meses.push({
+      mes, label: MESES[mes - 1], kF, kE, a: kF, b: kE, dk: pct(kF, kE),
+      cvE: cv, cfE: cf, rsE: rs, totE: cv != null || cf != null ? (cv ?? 0) + (cf ?? 0) : null,
+      eneF: kF ? f.energia / kF : null, fijF: kF ? f.fijo / kF : null, totF: kF ? f.neto / kF : null, facturas: f?.facturas || 0,
+      comparable: kF != null && kE != null,
+    });
+  }
+  const c = meses.filter((m) => m.comparable);
+  const sum = (arr, k) => arr.reduce((a, m) => a + (m[k] ?? 0), 0);
+  const kFc = sum(c, 'kF'), kEc = sum(c, 'kE');
+  const cc = c.filter((m) => m.totE != null && m.totF != null);
+  const totF = cc.length ? cc.reduce((a, m) => a + m.totF * m.kF, 0) / sum(cc, 'kF') : null;
+  const totE = cc.length ? cc.reduce((a, m) => a + m.totE * m.kE, 0) / sum(cc, 'kE') : null;
+  return { meses, comparables: c.length, kFc, kEc, dk: pct(kFc, kEc), totF, totE, dt: pct(totF, totE), pyc: E[seg]?.pyc?.[0] ?? null, kEanio: sum(meses, 'kE') };
+}
+
+function statsComp(r, conTitulo) {
+  return [
+    `<div><span class="k">Consumo · ${r.comparables} ${r.comparables === 1 ? 'mes comparable' : 'meses comparables'}</span><span class="v">${fN(r.kFc / 1000)} MWh</span><span class="s">equipo: ${fN(r.kEc / 1000)} MWh</span></div>`,
+    `<div><span class="k">Desviación de consumo</span><span class="v">${desv(r.dk)}</span><span class="s">facturas vs. equipo</span></div>`,
+    `<div><span class="k">Coste €/kWh (sin RevShare)</span><span class="v">${r.totF == null ? '—' : fN(r.totF, 3)}</span><span class="s">equipo CV+CF: ${r.totE == null ? '—' : fN(r.totE, 3)}</span></div>`,
+    `<div><span class="k">Desviación de coste</span><span class="v">${desv(r.dt)}</span><span class="s">${conTitulo ? 'mismos meses' : 'ponderada por consumo'}</span></div>`,
+  ].join('');
+}
+
+async function datosComp() {
+  const anio = ST.anio ?? new Date().getFullYear();
+  if (!COMP || COMP.anio !== anio) COMP = await SB.rpc('comparativa', { p_anio: anio });
+  return COMP;
+}
+
+async function cargarCompMini() {
+  const card = $('#cardComp');
+  const d = await seguro(datosComp);
+  if (!d || !d.carga) { card.classList.add('hide'); return; }
+  const r = calcComp(d, 'TOTAL');
+  if (!r.comparables) { card.classList.add('hide'); return; }
+  card.classList.remove('hide');
+  $('#compStats').innerHTML = statsComp(r, true);
+}
+
+async function cargarComparativa() {
+  $('#compKpis').innerHTML = Array.from({ length: 4 }, () => `<div>${sk('60%')}<span class="v">${sk('90px', '22px')}</span>${sk('70%')}</div>`).join('');
+  $('#chComp').innerHTML = `<div class="sk-cols">${ALTOS.map((h) => `<span class="sk" style="height:${h}%"></span>`).join('')}</div>`;
+  skTabla($('#tbComp'), 12, 6);
+  const d = await seguro(datosComp);
+  if (!d) return;
+  pintarAnaEstado(d);
+  cargarHistorialAna();
+  const anio = d.anio;
+  if (!d.carga) {
+    $('#compCuerpo').classList.add('hide'); $('#compVacio').classList.remove('hide');
+    $('#compVacio').innerHTML = `No hay analítico del equipo para <b>${anio}</b>.<br>Súbelo con el botón «Subir Excel del equipo».` +
+      (d.anios_equipo.length ? `<br><span class="sm">Hay analítico de: ${d.anios_equipo.join(', ')}. Cambia el año arriba.</span>` : '');
+    $('#tbComp').innerHTML = ''; $('#compSeg').textContent = '';
+    return;
+  }
+  $('#compCuerpo').classList.remove('hide'); $('#compVacio').classList.add('hide');
+  const r = calcComp(d, ST.seg);
+  $('#compKpis').innerHTML = statsComp(r);
+  groupedChart($('#chComp'), r.meses, {
+    tipFn: (m) => tipRows(`${m.label} ${anio}`, [['Facturas', m.kF == null ? 'sin facturas' : fN(m.kF) + ' kWh'], ['Equipo', m.kE == null ? '—' : fN(Math.round(m.kE)) + ' kWh'], ['Desviación', fPct(m.dk)]]),
+  });
+  const segTxt = { TOTAL: 'Total (BT + MT)', BT: 'Baja tensión (BT)', MT: 'Media tensión (MT)' }[ST.seg];
+  $('#compSeg').textContent = `${segTxt} · ${anio} · por mes de consumo${r.pyc != null ? ` · PYC del equipo: ${fN(r.pyc, 4)} €/kWh` : ''}`;
+  const f3 = (v) => (v == null ? '—' : fN(v, 3));
+  const fila = (m) => `<tr${m.comparable ? '' : ' class="muted"'}>
+    <td>${m.label}</td>
+    <td class="num sep">${m.kF == null ? '—' : fN(m.kF)}</td><td class="num">${m.kE == null ? '—' : fN(Math.round(m.kE))}</td><td class="num">${m.comparable ? desv(m.dk) : '—'}</td>
+    <td class="num sep">${f3(m.eneF)}</td><td class="num">${f3(m.cvE)}</td>
+    <td class="num sep">${f3(m.fijF)}</td><td class="num">${f3(m.cfE)}</td>
+    <td class="num sep">${f3(m.totF)}</td><td class="num">${f3(m.totE)}</td><td class="num">${m.totF != null && m.totE != null ? desv(pct(m.totF, m.totE)) : '—'}</td>
+    <td class="num sep">${f3(m.rsE)}</td></tr>`;
+  $('#tbComp').classList.remove('loading');
+  $('#tbComp').innerHTML = `<thead>
+    <tr><th></th><th colspan="3" class="grp sep">Consumo (kWh)</th><th colspan="2" class="grp sep">Variable €/kWh</th><th colspan="2" class="grp sep">Fijo €/kWh</th><th colspan="3" class="grp sep">Total €/kWh</th><th class="grp sep">€/kWh</th></tr>
+    <tr><th>Mes</th><th class="num sep">Facturas</th><th class="num">Equipo</th><th class="num">Desv.</th>
+    <th class="num sep">Energía fact.</th><th class="num">CV equipo</th><th class="num sep">Pot.+alq. fact.</th><th class="num">CF equipo</th>
+    <th class="num sep">Facturas</th><th class="num">CV+CF eq.</th><th class="num">Desv.</th><th class="num sep">RevShare eq.</th></tr></thead><tbody>` +
+    r.meses.map(fila).join('') +
+    `<tr class="tot"><td>Meses comparables</td><td class="num sep">${fN(r.kFc)}</td><td class="num">${fN(Math.round(r.kEc))}</td><td class="num">${desv(r.dk)}</td>
+     <td class="sep" colspan="4"></td><td class="num sep">${f3(r.totF)}</td><td class="num">${f3(r.totE)}</td><td class="num">${desv(r.dt)}</td><td class="sep"></td></tr></tbody>`;
+}
+
+function pintarAnaEstado(d) {
+  const c = d.carga;
+  $('#anaEstado').innerHTML = c
+    ? `Usando para <b>${d.anio}</b>: <b>${esc(c.archivo || 'sin nombre')}</b><br><span class="sm">subido el ${fFechaHora(c.fecha)}${c.usuario_email ? ' por ' + esc(c.usuario_email) : ''}</span>`
+    : `Aún no hay analítico del equipo para <b>${d.anio}</b>.`;
+}
+async function cargarHistorialAna() {
+  const h = await seguro(() => SB.select('analitico_cargas', { select: '*', order: 'fecha.desc', limit: 20 }));
+  if (!h) return;
+  $('#tbAna').innerHTML = h.length ? `<thead><tr><th>Año</th><th>Archivo</th><th>Subido</th>${ST.admin ? '<th></th>' : ''}</tr></thead><tbody>` +
+    h.map((c) => `<tr><td>${c.anio}</td><td class="files" title="${esc(c.archivo)}">${esc(c.archivo)}</td><td class="muted sm">${fFechaHora(c.fecha)}</td>${ST.admin ? `<td><button class="btn mini danger aDel" data-id="${c.id}">Borrar</button></td>` : ''}</tr>`).join('') + '</tbody>' : '';
+  $$('.aDel').forEach((b) => b.onclick = async () => {
+    if (b.dataset.ok !== '1') { b.dataset.ok = '1'; b.textContent = '¿Seguro?'; setTimeout(() => { b.dataset.ok = ''; b.textContent = 'Borrar'; }, 3000); return; }
+    await seguro(() => SB.rest('DELETE', 'analitico_cargas', { query: { id: 'eq.' + b.dataset.id }, prefer: 'return=minimal' }));
+    COMP = null; cargarComparativa(); toast('Analítico borrado');
+  });
+}
+async function subirAnalitico(file) {
+  try {
+    const r = leerAnalitico(await file.arrayBuffer());
+    const [c] = await SB.insert('analitico_cargas', [{ anio: r.anio, archivo: file.name }], { query: { select: 'id' } });
+    await SB.insert('analitico_valores', r.valores.map((v) => ({ carga_id: c.id, ...v })), { prefer: 'return=minimal' });
+    COMP = null;
+    if (ST.anio !== r.anio) { ST.anio = r.anio; ST.todo = false; $('#selAnio').value = r.anio; guardarFiltros(); }
+    toast(`Analítico ${r.anio} guardado: ${r.valores.length} valores${r.avisos.length ? ' · ' + r.avisos.join(' ') : ''}`, 7000);
+    cargarComparativa();
+  } catch (e) {
+    if (e.message === 'sin_sesion') mostrarLogin(); else toast('No se pudo leer el Excel del equipo: ' + e.message, 9000);
+  }
+}
+
 // ---------------------------------------------------------------- CORRECCIONES
 const CAMPOS = { estado: 'Estado de la factura', id_factura: 'ID factura', cups: 'CUPS', tipo_lectura: 'Tipo de lectura',
   distribuidora: 'Distribuidora', tarifa: 'Tarifa', sheet_code: 'Pestaña', archivo_origen: 'Archivo de origen' };
@@ -486,7 +652,7 @@ async function guardarRegla(e) {
   datosCambiados(); await cargarCorrecciones(); toast('Corrección guardada y aplicada');
 }
 /** Tras cambiar datos o correcciones: olvidar cachés y recalcular lo visible */
-function datosCambiados() { PUNTOS.clave = null; DASH = null; }
+function datosCambiados() { PUNTOS.clave = null; DASH = null; COMP = null; }
 
 // ---------------------------------------------------------------- CARGAR
 const OK = /\.(xlsx|xlsm|xls|zip)$/i;
@@ -609,6 +775,7 @@ const TITULOS = {
   facturas: ['Facturas', 'Todas las líneas de factura unificadas, sin duplicados'],
   cups: ['CUPS', 'Consumo y coste agregados por CUPS (un CUPS puede agrupar varios puntos de recarga)'],
   cruce: ['Cruce con sistema técnico', 'Facturado vs. medido'],
+  comparativa: ['Comparativa', 'Facturas frente al analítico que monta el equipo'],
   correcciones: ['Correcciones', 'Reglas para corregir cómo cuentan algunas facturas'],
   cargar: ['Cargar datos', 'Sube Excels, carpetas o ZIPs de facturación agrupada'],
 };
@@ -620,7 +787,8 @@ function mostrarVista(v) {
   $$('nav a').forEach((a) => a.classList.toggle('on', a.dataset.v === v));
   $$('.vista').forEach((s) => s.classList.toggle('hide', s.id !== 'v-' + v));
   $('#titulo').textContent = TITULOS[v][0]; $('#subtitulo').textContent = TITULOS[v][1];
-  $('#filtros').classList.toggle('hide', !['inicio', 'facturas', 'cups'].includes(v));
+  $('#filtros').classList.toggle('hide', !['inicio', 'facturas', 'cups', 'comparativa'].includes(v));
+  $('#segBase').classList.toggle('hide', v === 'comparativa');   // la comparativa va siempre por mes de consumo
   if (v === 'inicio') skDashboard();
 }
 function refrescar() {
@@ -629,6 +797,7 @@ function refrescar() {
   else if (ST.vista === 'cups') cargarPuntos();
   else if (ST.vista === 'cargar') cargarCargas();
   else if (ST.vista === 'correcciones') cargarCorrecciones();
+  else if (ST.vista === 'comparativa') cargarComparativa();
 }
 async function refrescarAnios() {
   const [anios, res] = await Promise.all([seguro(() => SB.rpc('anios', { p_base: ST.base })), seguro(() => SB.rpc('resumen'))]);
@@ -702,6 +871,12 @@ function init() {
   };
   $('#btnSalir').onclick = async () => { await SB.logout(); mostrarLogin(); };
 
+  // comparativa
+  $$('#segComp button').forEach((b) => b.onclick = () => {
+    $$('#segComp button').forEach((x) => x.classList.toggle('on', x === b)); ST.seg = b.dataset.s; cargarComparativa();
+  });
+  $('#anaFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) subirAnalitico(f); };
+
   // correcciones y actualizar
   $('#fRegla').onsubmit = guardarRegla;
   $('#rCampo').onchange = sugerirValores;
@@ -754,7 +929,10 @@ function init() {
     await refrescarAnios(); cargarCargas();
   };
 
-  let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (ST.vista === 'inicio' && DASH && !DASH.vacio) pintarDashboard(); }, 150); });
+  let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => {
+    if (ST.vista === 'inicio' && DASH && !DASH.vacio) pintarDashboard();
+    if (ST.vista === 'comparativa' && COMP?.carga) cargarComparativa();
+  }, 150); });
   addEventListener('hashchange', () => { if (!$('#appRoot').classList.contains('hide')) irA(location.hash.slice(1)); });
 
   leerFiltros();

@@ -429,6 +429,69 @@ grant execute on function public.anios(text), public.resumen(), public.puntos(in
 revoke execute on function public.anios(text), public.resumen(), public.puntos(int, text),
                   public.dashboard(int, text), public.vaciar() from anon, public;
 
+
+-- ---------------------------------------------------------------- analítico del equipo
+-- Excel "Costes por BT y MT" que el equipo monta a mano, para contrastarlo con las facturas.
+create table if not exists public.analitico_cargas (
+  id            bigint generated always as identity primary key,
+  anio          int not null,
+  archivo       text,
+  fecha         timestamptz not null default now(),
+  usuario_email text default (auth.jwt() ->> 'email')
+);
+create table if not exists public.analitico_valores (
+  carga_id  bigint not null references public.analitico_cargas(id) on delete cascade,
+  segmento  text not null check (segmento in ('TOTAL', 'BT', 'MT')),
+  concepto  text not null check (concepto in ('consumo', 'cv', 'revshare', 'cf', 'pyc')),
+  mes       int  not null check (mes between 0 and 12),     -- 0 = valor anual (p. ej. PYC)
+  valor     numeric,
+  primary key (carga_id, segmento, concepto, mes)
+);
+alter table public.analitico_cargas  enable row level security;
+alter table public.analitico_valores enable row level security;
+drop policy if exists ana_c_leer on public.analitico_cargas;
+drop policy if exists ana_c_ins  on public.analitico_cargas;
+drop policy if exists ana_c_del  on public.analitico_cargas;
+drop policy if exists ana_v_leer on public.analitico_valores;
+drop policy if exists ana_v_ins  on public.analitico_valores;
+create policy ana_c_leer on public.analitico_cargas  for select to authenticated using (true);
+create policy ana_c_ins  on public.analitico_cargas  for insert to authenticated with check (true);
+create policy ana_c_del  on public.analitico_cargas  for delete to authenticated using (public.es_admin());
+create policy ana_v_leer on public.analitico_valores for select to authenticated using (true);
+create policy ana_v_ins  on public.analitico_valores for insert to authenticated with check (true);
+revoke all on public.analitico_cargas, public.analitico_valores from anon;
+grant select, insert, delete on public.analitico_cargas  to authenticated;
+grant select, insert         on public.analitico_valores to authenticated;
+
+-- Comparativa de un año: último analítico subido de ese año + lo calculado desde las facturas
+-- (siempre por mes de consumo; BT/MT según la tarifa: 6.x = MT, resto = BT)
+create or replace function public.comparativa(p_anio int)
+returns jsonb language sql stable as $$
+  with ult as (
+    select * from public.analitico_cargas where anio = p_anio order by fecha desc, id desc limit 1
+  ),
+  nuestro as (
+    select extract(month from f.fecha_hasta)::int mes,
+           case when upper(coalesce(f.tarifa, '')) like '6%' then 'MT' else 'BT' end seg,
+           sum(f.kwh) kwh, sum(f.imp_energia) energia,
+           coalesce(sum(f.imp_potencia), 0) + coalesce(sum(f.imp_alquiler), 0) fijo,
+           sum(f.imp_neto) neto, count(distinct f.id_factura) facturas
+    from public.facturas_ok f
+    where extract(year from f.fecha_hasta) = p_anio
+    group by 1, 2
+  )
+  select jsonb_build_object(
+    'anio', p_anio,
+    'anios_equipo', (select coalesce(jsonb_agg(distinct anio), '[]') from public.analitico_cargas),
+    'carga', (select to_jsonb(u) from ult u),
+    'equipo', (select coalesce(jsonb_agg(jsonb_build_object('seg', v.segmento, 'concepto', v.concepto, 'mes', v.mes, 'valor', v.valor)), '[]')
+               from public.analitico_valores v join ult u on u.id = v.carga_id),
+    'nuestro', (select coalesce(jsonb_agg(to_jsonb(n)), '[]') from nuestro n)
+  );
+$$;
+grant execute on function public.comparativa(int) to authenticated;
+revoke execute on function public.comparativa(int) from anon, public;
+
 -- ---------------------------------------------------------------- ajustes finales
 -- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)
 alter role authenticated set statement_timeout = '30s';

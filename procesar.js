@@ -145,3 +145,72 @@ async function prepararFilas(nombreArchivo, partes, vistas, log) {
   if (dup) log(`✂ ${dup} filas duplicadas eliminadas de ${base}`);
   return { filas, dup };
 }
+
+// ---------------------------------------------------------------- analítico del equipo
+/** Lee el Excel "Costes por BT y MT" que monta el equipo.
+ *  Busca por etiquetas (no por celdas fijas): bloques BT y MT en la columna A, filas CONSUMO,
+ *  fila de fechas (meses) y filas CV / RevShare / CF, y la columna "de los cuales PYC".
+ *  Devuelve { anio, valores: [{segmento, concepto, mes, valor}], avisos: [] } */
+function leerAnalitico(datos) {
+  const wb = XLSX.read(datos, { type: 'array', cellDates: false });
+  const esSerie = (v) => typeof v === 'number' && v > 36000 && v < 60000;            // fecha Excel (2000-2064)
+  const mesAnio = (v) => { const d = new Date(Math.round((v - 25569) * 86400000)); return [d.getUTCMonth() + 1, d.getUTCFullYear()]; };
+  const txt = (v) => norm(v);
+  for (const nombre of wb.SheetNames) {
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[nombre], { header: 1, raw: true, defval: null, blankrows: true });
+    const filaBloque = (et) => aoa.findIndex((r) => r && txt(r[0]) === et);
+    const iBT = filaBloque('BT'), iMT = filaBloque('MT');
+    if (iBT < 0) continue;
+    const avisos = []; const valores = []; const anios = {};
+    const tieneConsumo = (r) => r && r.some((v) => txt(v) === 'CONSUMO');
+    const filaFechas = (desde, hasta) => {
+      for (let i = desde; i < hasta; i++) { const r = aoa[i] || []; if (r.filter(esSerie).length >= 6) return i; }
+      return -1;
+    };
+    const mapaMeses = (iF) => {
+      const m = {};
+      (aoa[iF] || []).forEach((v, c) => { if (esSerie(v)) { const [mes, an] = mesAnio(v); m[c] = mes; anios[an] = (anios[an] || 0) + 1; } });
+      return m;
+    };
+    const leerFila = (r, meses, seg, concepto) => {
+      let n = 0;
+      for (const [c, mes] of Object.entries(meses)) {
+        const v = r[c];
+        if (typeof v === 'number' && isFinite(v)) { valores.push({ segmento: seg, concepto, mes, valor: v }); n++; }
+      }
+      return n;
+    };
+    const bloques = [['BT', iBT, iMT > iBT ? iMT : aoa.length], ['MT', iMT, iMT >= 0 ? (iBT > iMT ? iBT : aoa.length) : -1]];
+    let mesesRef = null;
+    for (const [seg, ini, fin] of bloques) {
+      if (ini < 0) continue;
+      const iF = filaFechas(ini, fin);
+      if (iF < 0) { avisos.push(`No encuentro la fila de meses del bloque ${seg}.`); continue; }
+      const meses = mapaMeses(iF); mesesRef = mesesRef || meses;
+      const iC = aoa.slice(ini, fin).findIndex(tieneConsumo);
+      if (iC >= 0) leerFila(aoa[ini + iC], meses, seg, 'consumo');
+      const colPyc = (aoa[iF] || []).findIndex((v) => /PYC/.test(txt(v)));
+      for (let i = iF + 1; i < fin; i++) {
+        const r = aoa[i] || []; const et = txt(r[0]);
+        const concepto = { CV: 'cv', REVSHARE: 'revshare', CF: 'cf' }[et];
+        if (!concepto) continue;
+        if (!leerFila(r, meses, seg, concepto)) avisos.push(`El bloque ${seg} tiene la fila ${r[0]} sin valores.`);
+        if (concepto === 'cv' && colPyc >= 0 && typeof r[colPyc] === 'number') valores.push({ segmento: seg, concepto: 'pyc', mes: 0, valor: r[colPyc] });
+      }
+    }
+    // consumo total: fila CONSUMO por encima del primer bloque
+    const iPrimero = Math.min(...[iBT, iMT].filter((i) => i >= 0));
+    for (let i = iPrimero - 1; i >= 0; i--) if (tieneConsumo(aoa[i])) { if (mesesRef) leerFila(aoa[i], mesesRef, 'TOTAL', 'consumo'); break; }
+
+    const anio = +Object.entries(anios).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!anio) throw new Error('No encuentro los meses (fechas) en el Excel del equipo.');
+    if (!valores.some((v) => v.concepto === 'consumo')) throw new Error('No encuentro filas de CONSUMO con números. Si el Excel tiene fórmulas, ábrelo y guárdalo en Excel antes de subirlo.');
+    // si no viene el total, se calcula como BT + MT
+    if (!valores.some((v) => v.segmento === 'TOTAL')) {
+      const t = {}; for (const v of valores) if (v.concepto === 'consumo') t[v.mes] = (t[v.mes] || 0) + v.valor;
+      for (const [mes, valor] of Object.entries(t)) valores.push({ segmento: 'TOTAL', concepto: 'consumo', mes: +mes, valor });
+    }
+    return { anio, valores, avisos, hoja: nombre };
+  }
+  throw new Error('No parece el Excel del analítico: no encuentro los bloques «BT» / «MT» en la columna A.');
+}

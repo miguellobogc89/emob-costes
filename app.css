@@ -241,3 +241,26 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .sk-line .sk { height: 1px; width: 100%; border-radius: 0; }
 .sk-line .sk.onda { height: 46%; border-radius: 8px; opacity: .7; }
 .tbl tr.skr td { border-bottom-color: #f3f4f6; }
+
+/* ---------- comparativa ---------- */
+:root { --s2: #eb6834; }
+.g-top { margin-top: 0; }
+.comp-mini { margin-top: 16px; }
+.comp-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 8px; }
+.comp-stats > div { background: #f7f8fa; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.comp-stats .k { font-size: 12px; color: var(--ink-2); }
+.comp-stats .v { font-size: 20px; font-weight: 600; }
+.comp-stats .s { font-size: 12px; color: var(--ink-2); }
+.desv { font-weight: 600; font-variant-numeric: tabular-nums; }
+.desv.alta::before { content: "⚠ "; color: var(--bad); }
+.leyenda { display: flex; gap: 16px; font-size: 12.5px; color: var(--ink-2); margin: 6px 0 2px; }
+.leyenda i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.leyenda .sw1 { background: var(--s1); } .leyenda .sw2 { background: var(--s2); }
+.chart .bar2 { fill: var(--s2); transition: opacity .12s; }
+.chart.hovering .bar2 { opacity: .35; }
+.chart.hovering .bar2.hl { opacity: 1; }
+.empty-mini { padding: 40px 10px; text-align: center; color: var(--ink-2); }
+.tbl th.grp { text-align: center; border-bottom: 1px solid var(--line); }
+.tbl td.sep, .tbl th.sep { border-left: 1px solid var(--line); }
+.tbl tr.tot td { font-weight: 600; background: #fafbfc; }
+@media (max-width: 1200px) { .comp-stats { grid-template-columns: 1fr 1fr; } }
