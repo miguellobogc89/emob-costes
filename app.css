@@ -264,3 +264,4 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .tbl td.sep, .tbl th.sep { border-left: 1px solid var(--line); }
 .tbl tr.tot td { font-weight: 600; background: #fafbfc; }
 @media (max-width: 1200px) { .comp-stats { grid-template-columns: 1fr 1fr; } }
+.pill-bt { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }

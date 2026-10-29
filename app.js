@@ -209,7 +209,7 @@ let DASH = null;
 async function cargarDashboard() {
   skDashboard();
   const pedido = JSON.stringify(args());
-  const d = await seguro(() => SB.rpc('dashboard', args()));
+  const [d] = await Promise.all([seguro(() => SB.rpc('dashboard', args())), ST.anio ? seguro(datosComp) : null]);
   if (pedido !== JSON.stringify(args())) return;      // el usuario cambió el filtro mientras cargaba
   if (!d) return;
   DASH = d;
@@ -241,10 +241,17 @@ function pintarDashboard() {
   const baseTxt = d.base === 'consumo' ? 'por fecha fin del periodo facturado' : 'por fecha de emisión';
   $('#hMens').textContent = `kWh · ${baseTxt}`;
   const mens = d.mensual.map((m) => ({ ...m, label: MESES[m.mes - 1], value: m.kwh }));
-  columnChart($('#chMensual'), mens, {
-    tipFn: (m) => tipRows(`${MESES[m.mes - 1]} ${d.anio ?? ''}`, m.kwh == null ? [['Sin facturas', '']] :
-      [['Consumo', fN(m.kwh) + ' kWh'], ['Importe sin IVA', fEur(m.neto)], ['€/kWh', m.eur_kwh == null ? '—' : fN(m.eur_kwh, 3)], ['Facturas', fN(m.facturas)]]),
-  });
+  // consumo BT del analítico del equipo (solo por mes de consumo y si hay analítico de ese año)
+  const eqBT = {};
+  if (d.base === 'consumo' && d.anio && COMP?.anio === d.anio && COMP.carga)
+    for (const v of COMP.equipo) if (v.seg === 'BT' && v.concepto === 'consumo') eqBT[v.mes] = +v.valor;
+  const conEquipo = Object.keys(eqBT).length > 0;
+  $('#legMens').classList.toggle('hide', !conEquipo);
+  const tipMes = (m) => tipRows(`${MESES[m.mes - 1]} ${d.anio ?? ''}`, (m.kwh == null ? [['Facturas', 'sin facturas']] :
+    [['Consumo facturas', fN(m.kwh) + ' kWh'], ['Importe sin IVA', fEur(m.neto)], ['€/kWh', m.eur_kwh == null ? '—' : fN(m.eur_kwh, 3)], ['Facturas', fN(m.facturas)]])
+    .concat(conEquipo ? [['Equipo (BT)', eqBT[m.mes] == null ? '—' : fN(Math.round(eqBT[m.mes])) + ' kWh'], ['Desviación', fPct(pct(m.kwh, eqBT[m.mes]))]] : []));
+  if (conEquipo) groupedChart($('#chMensual'), mens.map((m) => ({ ...m, a: m.kwh, b: eqBT[m.mes] ?? null })), { tipFn: tipMes });
+  else columnChart($('#chMensual'), mens, { tipFn: tipMes });
   lineChart($('#chEurKwh'), mens.map((m) => ({ ...m, value: m.eur_kwh })), {
     fmtAxis: (v) => nf(2).format(v), fmtEnd: (v) => fN(v, 3),
     tipFn: (m) => tipRows(`${MESES[m.mes - 1]} ${d.anio ?? ''}`, [['Coste medio', m.eur_kwh == null ? '—' : fN(m.eur_kwh, 3) + ' €/kWh'], ['Importe sin IVA', fEur(m.neto)]]),
@@ -465,7 +472,7 @@ function groupedChart(el, data, { fmtAxis = fComp, tipFn }) {
   });
 }
 
-let COMP = null; ST.seg = 'TOTAL';
+let COMP = null; ST.seg = 'BT';   // MT descartado por ahora
 const pct = (a, b) => (a == null || b == null || !b ? null : (a - b) / Math.abs(b) * 100);
 const fPct = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${fN(v, 1)} %`);
 const desv = (v, umbral = 10) => `<span class="desv ${v != null && Math.abs(v) > umbral ? 'alta' : ''}">${fPct(v)}</span>`;
@@ -527,7 +534,7 @@ async function cargarCompMini() {
   const card = $('#cardComp');
   const d = await seguro(datosComp);
   if (!d || !d.carga) { card.classList.add('hide'); return; }
-  const r = calcComp(d, 'TOTAL');
+  const r = calcComp(d, 'BT');
   if (!r.comparables) { card.classList.add('hide'); return; }
   card.classList.remove('hide');
   $('#compStats').innerHTML = statsComp(r, true);
@@ -555,7 +562,7 @@ async function cargarComparativa() {
   groupedChart($('#chComp'), r.meses, {
     tipFn: (m) => tipRows(`${m.label} ${anio}`, [['Facturas', m.kF == null ? 'sin facturas' : fN(m.kF) + ' kWh'], ['Equipo', m.kE == null ? '—' : fN(Math.round(m.kE)) + ' kWh'], ['Desviación', fPct(m.dk)]]),
   });
-  const segTxt = { TOTAL: 'Total (BT + MT)', BT: 'Baja tensión (BT)', MT: 'Media tensión (MT)' }[ST.seg];
+  const segTxt = 'Baja tensión (BT)';
   $('#compSeg').textContent = `${segTxt} · ${anio} · por mes de consumo${r.pyc != null ? ` · PYC del equipo: ${fN(r.pyc, 4)} €/kWh` : ''}`;
   const f3 = (v) => (v == null ? '—' : fN(v, 3));
   const fila = (m) => `<tr${m.comparable ? '' : ' class="muted"'}>
@@ -872,9 +879,6 @@ function init() {
   $('#btnSalir').onclick = async () => { await SB.logout(); mostrarLogin(); };
 
   // comparativa
-  $$('#segComp button').forEach((b) => b.onclick = () => {
-    $$('#segComp button').forEach((x) => x.classList.toggle('on', x === b)); ST.seg = b.dataset.s; cargarComparativa();
-  });
   $('#anaFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) subirAnalitico(f); };
 
   // correcciones y actualizar
