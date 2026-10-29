@@ -28,7 +28,7 @@ const sk = (w, h = '0.9em') => `<span class="sk" style="width:${w};height:${h}">
 const ALTOS = [52, 48, 60, 57, 34, 28, 36, 30, 80, 44, 38, 50];
 function skDashboard() {
   $('#vacio').classList.add('hide'); $('#dash').classList.remove('hide');
-  $('#kKwh').innerHTML = sk('150px', '44px'); $('#kDelta').innerHTML = ''; $('#kHeroSub').innerHTML = sk('75%');
+  $('#kKwh').innerHTML = sk('150px', '44px'); $('#kDelta').innerHTML = ''; $('#kNetoDelta').innerHTML = ''; $('#kEurDelta').innerHTML = ''; $('#kHeroSub').innerHTML = sk('75%');
   for (const id of ['#kNeto', '#kEurKwh', '#kPuntos', '#kExceso']) $(id).innerHTML = sk('110px', '26px');
   for (const id of ['#kTotal', '#kFacturas', '#kExcesoSub']) $(id).innerHTML = sk('80%');
   $('#chMensual').innerHTML = `<div class="sk-cols">${ALTOS.map((h) => `<span class="sk" style="height:${h}%"></span>`).join('')}</div>`;
@@ -119,30 +119,31 @@ function frame(el, values, fmtAxis) {
 
 function columnChart(el, data, { fmtAxis = fComp, tipFn }) {
   if (el.clientWidth < 80) return;            // contenedor no visible: se pinta al volver
-  const { svg, W, H, m, y } = frame(el, data.map((d) => d.value), fmtAxis);
+  const { svg, W, H, m, y } = frame(el, data.flatMap((d) => [d.value, d.g]).filter((v) => v != null), fmtAxis);
   const band = (W - m.l - m.r) / data.length, bw = Math.min(24, band * 0.6);
   data.forEach((d, i) => {
     const cx = m.l + band * i + band / 2;
     const lx = svgEl('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }); lx.textContent = d.label; svg.append(lx);
-    if (d.value != null && d.value !== 0) {
-      const ya = y(Math.max(0, d.value)), yb = y(Math.min(0, d.value)), h = Math.max(1, yb - ya), r = Math.min(4, h / 2, bw / 2);
-      const x0 = cx - bw / 2, x1 = cx + bw / 2;
-      // extremo de datos redondeado, base recta
-      const p = d.value > 0
-        ? `M${x0},${yb} V${ya + r} Q${x0},${ya} ${x0 + r},${ya} H${x1 - r} Q${x1},${ya} ${x1},${ya + r} V${yb} Z`
-        : `M${x0},${ya} V${yb - r} Q${x0},${yb} ${x0 + r},${yb} H${x1 - r} Q${x1},${yb} ${x1},${yb - r} V${ya} Z`;
-      d._bar = svgEl('path', { d: p, class: 'bar' }); svg.append(d._bar);
-    }
+    barraSvg(svg, y, cx - bw / 2 - 4, bw + 8, d.g, 'ghost');            // año anterior, detrás y algo más ancha
+    d._bar = barraSvg(svg, y, cx - bw / 2, bw, d.value, 'bar');
     const hit = svgEl('rect', { x: cx - band / 2, y: m.t, width: band, height: H - m.t - m.b, fill: 'transparent' });
     hit.addEventListener('mousemove', (e) => { el.classList.add('hovering'); d._bar?.classList.add('hl'); showTip(e, tipFn(d)); });
     hit.addEventListener('mouseleave', () => { el.classList.remove('hovering'); d._bar?.classList.remove('hl'); hideTip(); });
     svg.append(hit);
   });
 }
+/** Barra con el extremo de datos redondeado y la base recta. */
+function barraSvg(svg, y, x0, bw, v, cls) {
+  if (v == null || v === 0) return null;
+  const ya = y(Math.max(0, v)), yb = y(Math.min(0, v)), h = Math.max(1, yb - ya), r = Math.min(4, h / 2, bw / 2), x1 = x0 + bw;
+  const d = v > 0 ? `M${x0},${yb} V${ya + r} Q${x0},${ya} ${x0 + r},${ya} H${x1 - r} Q${x1},${ya} ${x1},${ya + r} V${yb} Z`
+    : `M${x0},${ya} V${yb - r} Q${x0},${yb} ${x0 + r},${yb} H${x1 - r} Q${x1},${yb} ${x1},${yb - r} V${ya} Z`;
+  const p = svgEl('path', { d, class: cls }); svg.append(p); return p;
+}
 
-function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn }) {
+function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn, prev }) {
   if (el.clientWidth < 80) return;
-  const vals = data.map((d) => d.value).filter((v) => v != null);
+  const vals = data.map((d) => d.value).concat(prev || []).filter((v) => v != null);
   if (!vals.length) { el.innerHTML = '<p class="muted sm">Sin datos</p>'; return; }
   const lo = Math.min(...vals), hi = Math.max(...vals), pad = (hi - lo) * 0.25 || hi * 0.1 || 1;
   const { svg, W, H, m } = frameRange(el, lo - pad, hi + pad, fmtAxis);
@@ -157,6 +158,11 @@ function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn }) {
     }
     seg = [];
   };
+  if (prev) {   // año anterior: línea clara, sin puntos
+    let tramo = [];
+    const fin = () => { if (tramo.length > 1) svg.append(svgEl('path', { class: 'line-prev', d: 'M' + tramo.map(([a, b]) => `${a},${b}`).join(' L') })); tramo = []; };
+    prev.forEach((v, i) => { if (v == null) fin(); else tramo.push([X(i), frame.yy(v)]); }); fin();
+  }
   data.forEach((d, i) => { if (d.value == null) flush(); else seg.push([X(i), frame.yy(d.value)]); });
   flush();
   const xh = svgEl('line', { class: 'xhair', y1: m.t, y2: H - m.b, visibility: 'hidden' }); svg.append(xh);
@@ -192,11 +198,11 @@ function frameRange(el, lo, hi, fmtAxis) {
 }
 
 function hbars(el, rows, { fmtV, tipFn }) {
-  const max = Math.max(...rows.map((r) => Math.abs(r.value)), 1);
+  const max = Math.max(...rows.map((r) => Math.max(Math.abs(r.value), Math.abs(r.prev ?? 0))), 1);
   el.innerHTML = rows.map((r, i) => `
     <div class="hb" data-i="${i}">
       <span class="n" title="${esc(r.label)}">${esc(r.label)}</span>
-      <span class="t"><span class="f ${r.value < 0 ? 'neg' : ''}" style="width:${(Math.abs(r.value) / max) * 100}%"></span></span>
+      <span class="t">${r.prev != null ? `<span class="f g" style="width:${(Math.abs(r.prev) / max) * 100}%"></span>` : ''}<span class="f ${r.value < 0 ? 'neg' : ''}" style="width:${(Math.abs(r.value) / max) * 100}%"></span></span>
       <span class="v">${fmtV(r)}</span>
     </div>`).join('');
   if (tipFn) el.querySelectorAll('.hb').forEach((n) => {
@@ -205,15 +211,30 @@ function hbars(el, rows, { fmtV, tipFn }) {
   });
 }
 
-
 // ---------------------------------------------------------------- INICIO
 let DASH = null;
+// memoria en el navegador: se muestra al instante lo último visto y se actualiza por detrás
+const LS = {
+  get(k) { try { return JSON.parse(localStorage.getItem('emob.c.' + k) || 'null'); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem('emob.c.' + k, JSON.stringify(v)); } catch { /* lleno o no disponible */ } },
+};
+
 async function cargarDashboard() {
-  skDashboard();
   const pedido = JSON.stringify(args());
+  const clave = 'dash.' + pedido;
+  const guardado = LS.get(clave);
+  if (ST.anio && !COMP) COMP = LS.get('comp.' + ST.anio);
+  if (guardado && !guardado.vacio) mostrarDash(guardado); else skDashboard();
   const [d] = await Promise.all([seguro(() => SB.rpc('dashboard', args())), ST.anio ? seguro(datosComp) : null]);
   if (pedido !== JSON.stringify(args())) return;      // el usuario cambió el filtro mientras cargaba
   if (!d) return;
+  LS.set(clave, d);
+  if (guardado && JSON.stringify(guardado) === JSON.stringify(d) && !COMP_CAMBIO) return;   // nada nuevo
+  mostrarDash(d);
+}
+let COMP_CAMBIO = false;
+
+function mostrarDash(d) {
   DASH = d;
   if (ST.vista !== 'inicio') return;                  // se ha cambiado de pantalla mientras cargaba
   if (!d.vacio) cargarCompMini(); else $('#cardComp').classList.add('hide');
@@ -222,20 +243,26 @@ async function cargarDashboard() {
   if (!d.vacio) pintarDashboard();
 }
 
+const deltaHtml = (act, ant, ctx, subirEsBueno = true) => {
+  if (act == null || !ant) return '';
+  const v = (act / ant - 1) * 100, up = v >= 0, bueno = up === subirEsBueno;
+  return `<span class="${bueno ? 'up' : 'down'}">${up ? '▲' : '▼'} ${fN(Math.abs(v), 1)} %</span> <span class="ctx">${ctx}</span>`;
+};
+
 function pintarDashboard() {
   const d = DASH, k = d.kpi, per = d.anio ? d.anio : 'todo el histórico';
+  const ant = d.anio ? d.anio - 1 : null;
   $('#kHeroLbl').textContent = `Consumo facturado · ${per} · ${ST.tension || 'BT + MT'}`;
   $('#kKwh').textContent = fN(k.kwh / 1000, 0);
   $('#kHeroSub').textContent = `${fN(k.facturas)} facturas · ${fN(k.anuladas)} anuladas · ${fN(k.rectificativas)} rectificativas`;
-  const dl = $('#kDelta');
-  if (d.previo && d.previo.kwh > 0) {
-    const pct = (k.kwh / d.previo.kwh - 1) * 100, up = pct >= 0;
-    dl.className = 'delta ' + (up ? 'up' : 'down');
-    dl.innerHTML = `${up ? '▲' : '▼'} ${fN(Math.abs(pct), 1)} % <span class="ctx">vs. mismos meses de ${d.anio - 1}</span>`;
-  } else { dl.className = 'delta'; dl.innerHTML = ''; }
+  const pv = d.previo && d.previo.kwh > 0 ? d.previo : null;
+  $('#kDelta').className = 'delta';
+  $('#kDelta').innerHTML = pv ? deltaHtml(k.kwh, pv.kwh, `vs. mismos meses de ${ant}`) : '';
   $('#kNeto').textContent = fEur(k.neto);
+  $('#kNetoDelta').innerHTML = pv ? deltaHtml(k.neto, pv.neto, `vs. ${ant}`, false) : '';
   $('#kTotal').textContent = `${fEur(k.total)} con IVA`;
   $('#kEurKwh').textContent = k.eur_kwh == null ? '—' : fN(k.eur_kwh, 3) + ' €';
+  $('#kEurDelta').innerHTML = pv && k.eur_kwh != null ? deltaHtml(k.eur_kwh, pv.neto / pv.kwh, `vs. ${ant} (${fN(pv.neto / pv.kwh, 3)})`, false) : '';
   $('#kPuntos').textContent = fN(k.puntos);
   $('#kFacturas').textContent = `con consumo · ${fN(k.puntos_total)} en total`;
   $('#kExceso').textContent = fEur(k.exceso_eur);
@@ -243,31 +270,44 @@ function pintarDashboard() {
 
   const baseTxt = d.base === 'consumo' ? 'por fecha fin del periodo facturado' : 'por fecha de emisión';
   $('#hMens').textContent = `kWh · ${baseTxt}`;
-  const mens = d.mensual.map((m) => ({ ...m, label: MESES[m.mes - 1], value: m.kwh }));
+  const prev = d.mensual_prev || null;
+  const mens = d.mensual.map((m, i) => ({ ...m, label: MESES[m.mes - 1], value: m.kwh, g: prev?.[i]?.kwh ?? null, p: prev?.[i] || null }));
   // consumo BT del analítico del equipo (solo por mes de consumo y si hay analítico de ese año)
   const eqBT = {};
   if (d.base === 'consumo' && d.tension === 'BT' && d.anio && COMP?.anio === d.anio && COMP.carga)
     for (const v of COMP.equipo) if (v.seg === 'BT' && v.concepto === 'consumo') eqBT[v.mes] = +v.valor;
   const conEquipo = Object.keys(eqBT).length > 0;
-  $('#legMens').classList.toggle('hide', !conEquipo);
+  const hayPrev = !!prev && prev.some((m) => m.kwh);
+  $('#legMens').classList.toggle('hide', !conEquipo && !hayPrev);
+  $('#legMens').innerHTML = `<span><i class="sw1"></i>Facturas ${d.anio ?? ''}</span>` + (hayPrev ? `<span><i class="swg"></i>${ant}</span>` : '') + (conEquipo ? `<span><i class="sw2"></i>Analítico del equipo (BT)</span>` : '');
   const tipMes = (m) => tipRows(`${MESES[m.mes - 1]} ${d.anio ?? ''}`, (m.kwh == null ? [['Facturas', 'sin facturas']] :
     [['Consumo facturas', fN(m.kwh) + ' kWh'], ['Importe sin IVA', fEur(m.neto)], ['€/kWh', m.eur_kwh == null ? '—' : fN(m.eur_kwh, 3)], ['Facturas', fN(m.facturas)]])
-    .concat(conEquipo ? [['Equipo (BT)', eqBT[m.mes] == null ? '—' : fN(Math.round(eqBT[m.mes])) + ' kWh'], ['Desviación', fPct(pct(m.kwh, eqBT[m.mes]))]] : []));
+    .concat(hayPrev ? [[`Consumo ${ant}`, m.g == null ? '—' : fN(m.g) + ' kWh'], [`vs. ${ant}`, fPct(pct(m.kwh, m.g))]] : [])
+    .concat(conEquipo ? [['Equipo (BT)', eqBT[m.mes] == null ? '—' : fN(Math.round(eqBT[m.mes])) + ' kWh'], ['vs. equipo', fPct(pct(m.kwh, eqBT[m.mes]))]] : []));
   if (conEquipo) groupedChart($('#chMensual'), mens.map((m) => ({ ...m, a: m.kwh, b: eqBT[m.mes] ?? null })), { tipFn: tipMes });
   else columnChart($('#chMensual'), mens, { tipFn: tipMes });
+  // €/kWh del año anterior; se ignoran meses con valores imposibles (pocos kWh o abonos)
+  const prevEur = hayPrev ? prev.map((m) => (m.eur_kwh != null && m.eur_kwh > 0 && m.eur_kwh < 2 ? m.eur_kwh : null)) : null;
+  $('#legEur').classList.toggle('hide', !hayPrev);
+  $('#legEur').innerHTML = `<span><i class="swl"></i>${d.anio ?? ''}</span><span><i class="swl g"></i>${ant}</span>`;
   lineChart($('#chEurKwh'), mens.map((m) => ({ ...m, value: m.eur_kwh })), {
-    fmtAxis: (v) => nf(2).format(v), fmtEnd: (v) => fN(v, 3),
-    tipFn: (m) => tipRows(`${MESES[m.mes - 1]} ${d.anio ?? ''}`, [['Coste medio', m.eur_kwh == null ? '—' : fN(m.eur_kwh, 3) + ' €/kWh'], ['Importe sin IVA', fEur(m.neto)]]),
+    fmtAxis: (v) => nf(2).format(v), fmtEnd: (v) => fN(v, 3), prev: prevEur,
+    tipFn: (m) => tipRows(`${MESES[m.mes - 1]} ${d.anio ?? ''}`, [['Coste medio', m.eur_kwh == null ? '—' : fN(m.eur_kwh, 3) + ' €/kWh'], ['Importe sin IVA', fEur(m.neto)]]
+      .concat(hayPrev ? [[`Coste medio ${ant}`, m.p?.eur_kwh == null ? '—' : fN(m.p.eur_kwh, 3) + ' €/kWh']] : [])),
   });
 
   const tot = d.costes.reduce((a, c) => a + c.eur, 0);
-  $('#hCostes').textContent = `Total ${fEur(tot)} con IVA`;
-  hbars($('#lsCostes'), d.costes.map((c) => ({ label: c.concepto, value: c.eur })), {
+  const cPrev = Object.fromEntries((d.costes_prev || []).map((c) => [c.concepto, c.eur]));
+  $('#hCostes').textContent = `Total ${fEur(tot)} con IVA${d.costes_prev ? ` · barra clara: ${ant}` : ''}`;
+  hbars($('#lsCostes'), d.costes.map((c) => ({ label: c.concepto, value: c.eur, prev: d.costes_prev ? (cPrev[c.concepto] ?? 0) : null })), {
     fmtV: (r) => `<b>${fEur(r.value)}</b> · ${fN(tot ? (r.value / tot) * 100 : 0, 1)} %`,
+    tipFn: d.costes_prev ? (r) => tipRows(r.label, [[String(d.anio), fEur(r.value)], [String(ant), fEur(r.prev)], ['Variación', fPct(pct(r.value, r.prev))]]) : null,
   });
   const ptot = d.periodos.reduce((a, c) => a + c.kwh, 0);
-  hbars($('#lsPeriodos'), d.periodos.map((p) => ({ label: p.periodo, value: p.kwh })), {
+  const pPrev = Object.fromEntries((d.periodos_prev || []).map((c) => [c.periodo, c.kwh]));
+  hbars($('#lsPeriodos'), d.periodos.map((p) => ({ label: p.periodo, value: p.kwh, prev: d.periodos_prev ? (pPrev[p.periodo] ?? 0) : null })), {
     fmtV: (r) => `<b>${fN(r.value)}</b> kWh · ${fN(ptot ? (r.value / ptot) * 100 : 0, 1)} %`,
+    tipFn: d.periodos_prev ? (r) => tipRows(r.label, [[String(d.anio), fN(r.value) + ' kWh'], [String(ant), fN(r.prev) + ' kWh'], ['Variación', fPct(pct(r.value, r.prev))]]) : null,
   });
   const ltot = d.lecturas.reduce((a, c) => a + c.facturas, 0);
   hbars($('#lsLecturas'), d.lecturas.map((l) => ({ label: l.tipo, value: l.facturas })), {
@@ -460,7 +500,7 @@ async function exportarPuntos() {
 // ---------------------------------------------------------------- COMPARATIVA (analítico del equipo)
 function groupedChart(el, data, { fmtAxis = fComp, tipFn }) {
   if (el.clientWidth < 80) return;
-  const vals = data.flatMap((d) => [d.a, d.b]).filter((v) => v != null);
+  const vals = data.flatMap((d) => [d.a, d.b, d.g]).filter((v) => v != null);
   const { svg, W, H, m, y } = frame(el, vals.length ? vals : [0], fmtAxis);
   const band = (W - m.l - m.r) / data.length, bw = Math.min(14, band * 0.32);
   const barra = (x0, v, cls) => {
@@ -473,6 +513,7 @@ function groupedChart(el, data, { fmtAxis = fComp, tipFn }) {
   data.forEach((d, i) => {
     const cx = m.l + band * i + band / 2;
     const lx = svgEl('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }); lx.textContent = d.label; svg.append(lx);
+    barraSvg(svg, y, cx - bw - 4, bw + 6, d.g, 'ghost');                          // año anterior detrás de la azul
     const pa = barra(cx - bw - 1, d.a, 'bar'), pb = barra(cx + 1, d.b, 'bar2');   // 2px de aire entre las dos
     const hit = svgEl('rect', { x: cx - band / 2, y: m.t, width: band, height: H - m.t - m.b, fill: 'transparent' });
     hit.addEventListener('mousemove', (e) => { el.classList.add('hovering'); pa?.classList.add('hl'); pb?.classList.add('hl'); showTip(e, tipFn(d)); });
@@ -533,9 +574,14 @@ function statsComp(r, conTitulo) {
   ].join('');
 }
 
+let COMP_FRESCO = null;   // año del último COMP traído del servidor en esta sesión
 async function datosComp() {
   const anio = ST.anio ?? new Date().getFullYear();
-  if (!COMP || COMP.anio !== anio) COMP = await SB.rpc('comparativa', { p_anio: anio });
+  if (!COMP || COMP.anio !== anio || COMP_FRESCO !== anio) {
+    const nuevo = await SB.rpc('comparativa', { p_anio: anio });
+    COMP_CAMBIO = !COMP || JSON.stringify(COMP) !== JSON.stringify(nuevo);
+    COMP = nuevo; COMP_FRESCO = anio; LS.set('comp.' + anio, nuevo);
+  } else COMP_CAMBIO = false;
   return COMP;
 }
 
@@ -687,7 +733,7 @@ async function guardarRegla(e) {
   datosCambiados(); await cargarCorrecciones(); toast('Corrección guardada y aplicada');
 }
 /** Tras cambiar datos o correcciones: olvidar cachés y recalcular lo visible */
-function datosCambiados() { PUNTOS.clave = null; DASH = null; COMP = null; }
+function datosCambiados() { PUNTOS.clave = null; DASH = null; COMP_FRESCO = null; }
 
 // ---------------------------------------------------------------- CARGAR
 const OK = /\.(xlsx|xlsm|xls|zip)$/i;
@@ -839,6 +885,11 @@ function refrescar() {
   else if (ST.vista === 'comparativa') cargarComparativa();
 }
 async function refrescarAnios() {
+  const claveA = `anios.${ST.base}.${ST.tension}`;
+  if (!$('#selAnio').options.length) {
+    const g = LS.get(claveA);
+    if (g?.length) { $('#selAnio').innerHTML = g.map((a) => `<option value="${a}">${a}</option>`).join('') + '<option value="">Todo el histórico</option>'; if (ST.anio == null && !ST.todo) ST.anio = g[0]; $('#selAnio').value = ST.anio ?? ''; }
+  }
   const [anios, res] = await Promise.all([seguro(() => SB.rpc('anios', { p_base: ST.base, p_tension: ST.tension || null })), seguro(() => SB.rpc('resumen'))]);
   if (!anios || !res) {
     // sin respuesta: se usa el año en curso para no bloquear la carga y se reintenta en segundo plano
@@ -848,6 +899,7 @@ async function refrescarAnios() {
     return false;
   }
   ST.admin = !!res.admin;
+  LS.set(claveA, anios);
   if (res.pendientes > 0) prepararPendientes(res.pendientes);
   const sel = $('#selAnio'), prev = ST.anio;
   sel.innerHTML = anios.map((a) => `<option value="${a}">${a}</option>`).join('') + '<option value="">Todo el histórico</option>';
@@ -938,6 +990,7 @@ function init() {
   $('#rCampo').onchange = sugerirValores;
   $('#btnActualizar').onclick = async (e) => {
     const b = e.currentTarget; b.classList.add('girando'); b.disabled = true;
+    await seguro(() => SB.rpc('refrescar_cache'));
     datosCambiados(); CABS = null;
     await refrescarAnios(); await Promise.resolve(refrescar());
     setTimeout(() => { b.classList.remove('girando'); b.disabled = false; }, 400);

@@ -88,8 +88,8 @@
             <span class="delta" id="kDelta"></span>
             <span class="muted sm" id="kHeroSub"></span>
           </div>
-          <div class="card tile"><span class="lbl">Importe sin IVA<button class="info" type="button" aria-label="Qué significa" data-info="Lo pagado por esa electricidad sin IVA. Debajo, el total con IVA.">i</button></span><b id="kNeto">—</b><span class="muted sm" id="kTotal"></span></div>
-          <div class="card tile"><span class="lbl">Coste medio<button class="info" type="button" aria-label="Qué significa" data-info="Importe sin IVA dividido entre los kWh: el precio medio real de cada kWh, incluyendo energía, potencia, alquileres e impuesto eléctrico. Si sube, la luz sale más cara.">i</button></span><b id="kEurKwh">—</b><span class="muted sm">€/kWh sin IVA</span></div>
+          <div class="card tile"><span class="lbl">Importe sin IVA<button class="info" type="button" aria-label="Qué significa" data-info="Lo pagado por esa electricidad sin IVA. Debajo, el total con IVA.">i</button></span><b id="kNeto">—</b><span class="delta" id="kNetoDelta"></span><span class="muted sm" id="kTotal"></span></div>
+          <div class="card tile"><span class="lbl">Coste medio<button class="info" type="button" aria-label="Qué significa" data-info="Importe sin IVA dividido entre los kWh: el precio medio real de cada kWh, incluyendo energía, potencia, alquileres e impuesto eléctrico. Si sube, la luz sale más cara.">i</button></span><b id="kEurKwh">—</b><span class="delta" id="kEurDelta"></span><span class="muted sm">€/kWh sin IVA</span></div>
           <div class="card tile"><span class="lbl">CUPS facturados<button class="info" type="button" aria-label="Qué significa" data-info="Puntos de suministro (CUPS) con consumo en el periodo. Un mismo CUPS puede alimentar varios puntos de recarga.">i</button></span><b id="kPuntos">—</b><span class="muted sm" id="kFacturas"></span></div>
           <div class="card tile"><span class="lbl">Exceso de potencia<button class="info" type="button" aria-label="Qué significa" data-info="Penalización por superar la potencia contratada (por ejemplo, varios coches cargando a la vez). Es dinero evitable ajustando la potencia de esos CUPS o limitando la carga simultánea.">i</button></span><b id="kExceso">—</b><span class="muted sm" id="kExcesoSub"></span></div>
         </div>
@@ -101,12 +101,13 @@
 
         <div class="grid g2-1">
           <div class="card">
-            <div class="card-h"><h3>Consumo mensual<button class="info" type="button" aria-label="Qué significa" data-info="Cada barra azul es un mes y su altura son los kWh facturados. Si hay analítico del equipo para ese año, la barra naranja es su consumo BT (solo con «Mes de consumo»). Pasa el ratón por encima para ver el detalle. Un mes sin barra azul suele ser un mes aún no facturado.">i</button></h3><span class="muted sm" id="hMens">kWh</span></div>
-            <div class="leyenda hide" id="legMens"><span><i class="sw1"></i>Facturas</span><span><i class="sw2"></i>Analítico del equipo (BT)</span></div>
+            <div class="card-h"><h3>Consumo mensual<button class="info" type="button" aria-label="Qué significa" data-info="Cada barra azul es un mes y su altura son los kWh facturados. La barra clara de detrás es el mismo mes del año anterior. Si hay analítico del equipo para ese año, la barra naranja es su consumo BT (solo con «Mes de consumo»). Pasa el ratón por encima para ver el detalle. Un mes sin barra azul suele ser un mes aún no facturado.">i</button></h3><span class="muted sm" id="hMens">kWh</span></div>
+            <div class="leyenda hide" id="legMens"></div>
             <div class="chart" id="chMensual"></div>
           </div>
           <div class="card">
             <div class="card-h"><h3>Coste medio por mes<button class="info" type="button" aria-label="Qué significa" data-info="El coste medio (€/kWh sin IVA) mes a mes. Las barras dicen cuánto se consume; esta línea, a qué precio.">i</button></h3><span class="muted sm">€/kWh sin IVA</span></div>
+            <div class="leyenda hide" id="legEur"></div>
             <div class="chart" id="chEurKwh"></div>
           </div>
         </div>

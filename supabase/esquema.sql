@@ -203,6 +203,7 @@ create or replace function public.tg_correcciones()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
   perform public.recalcular_correcciones();
+  if to_regprocedure('public.refrescar_cache()') is not null then perform public.refrescar_cache(); end if;
   return null;
 end;
 $$;
@@ -353,6 +354,7 @@ begin
    where f.huella = f2.huella
      and (f.sustituida is distinct from (m.huella is not null) or f.motivo_sust is distinct from m.motivo);
   get diagnostics n = row_count;
+  if to_regprocedure('public.refrescar_cache()') is not null then perform public.refrescar_cache(); end if;
   return jsonb_build_object('cambiadas', n,
     'sustituidas', (select count(*) from public.facturas where sustituida),
     'kwh_sustituidos', (select coalesce(sum(kwh), 0) from public.facturas where sustituida));
@@ -464,25 +466,96 @@ drop function if exists public.anios(text);
 drop function if exists public.puntos(int, text);
 drop function if exists public.dashboard(int, text);
 
+-- ---------------------------------------------------------------- caché de resúmenes
+-- El dashboard no recorre las facturas: lee estos resúmenes, que se recalculan
+-- (refrescar_cache) al terminar una carga o al cambiar una regla.
+create table if not exists public.cache_mes (
+  base text not null, anio int, mes int, tension text, estado text, tipo_lectura text,
+  kwh numeric, kwh_p1 numeric, kwh_p2 numeric, kwh_p3 numeric, kwh_p4 numeric, kwh_p5 numeric, kwh_p6 numeric,
+  neto numeric, total numeric, energia numeric, potencia numeric, exceso numeric, alquiler numeric,
+  ie numeric, otros numeric, iva numeric, facturas bigint, filas bigint
+);
+create index if not exists cache_mes_idx on public.cache_mes (base, anio, tension);
+create table if not exists public.cache_cups (
+  base text not null, anio int, tension text, cups text,
+  direccion text, distribuidora text, tarifa text, ult date,
+  facturas bigint, kwh numeric, neto numeric, total numeric, exceso numeric, desde date, hasta date
+);
+create index if not exists cache_cups_idx on public.cache_cups (base, anio, tension);
+create table if not exists public.cache_info (
+  id int primary key default 1 check (id = 1),
+  actualizado timestamptz, filas bigint, facturas bigint, excluidas bigint, negativas bigint, sustituidas bigint
+);
+create index if not exists facturas_pend_idx on public.facturas (huella) where doc_agrupada is null;
+alter table public.cache_mes  enable row level security;
+alter table public.cache_cups enable row level security;
+alter table public.cache_info enable row level security;
+drop policy if exists cm_leer on public.cache_mes;
+drop policy if exists cc_leer on public.cache_cups;
+drop policy if exists ci_leer on public.cache_info;
+create policy cm_leer on public.cache_mes  for select to authenticated using (true);
+create policy cc_leer on public.cache_cups for select to authenticated using (true);
+create policy ci_leer on public.cache_info for select to authenticated using (true);
+revoke all on public.cache_mes, public.cache_cups, public.cache_info from anon;
+grant select on public.cache_mes, public.cache_cups, public.cache_info to authenticated;
+
+create or replace function public.refrescar_cache()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare t0 timestamptz := clock_timestamp();
+begin
+  delete from public.cache_mes where true;
+  delete from public.cache_cups where true;
+  insert into public.cache_mes
+  select b.base, extract(year from x.fecha)::int, extract(month from x.fecha)::int, f.tension, f.estado, f.tipo_lectura,
+         sum(f.kwh), sum(f.kwh_p1), sum(f.kwh_p2), sum(f.kwh_p3), sum(f.kwh_p4), sum(f.kwh_p5), sum(f.kwh_p6),
+         sum(f.imp_neto), sum(f.imp_total), sum(f.imp_energia), sum(f.imp_potencia), sum(f.imp_exceso), sum(f.imp_alquiler),
+         sum(f.imp_ie), sum(f.imp_otros), sum(f.imp_iva), count(distinct f.id_factura), count(*)
+  from public.facturas_ok f
+  cross join (values ('consumo'), ('emision')) b(base)
+  cross join lateral (select case when b.base = 'emision' then f.fecha_emision else f.fecha_hasta end fecha) x
+  group by 1, 2, 3, 4, 5, 6;
+  insert into public.cache_cups
+  select b.base, extract(year from x.fecha)::int, f.tension, f.cups,
+         (array_agg(f.direccion     order by f.fecha_hasta desc nulls last))[1],
+         (array_agg(f.distribuidora order by f.fecha_hasta desc nulls last))[1],
+         (array_agg(f.tarifa        order by f.fecha_hasta desc nulls last))[1],
+         max(f.fecha_hasta), count(distinct f.id_factura),
+         coalesce(sum(f.kwh), 0), coalesce(sum(f.imp_neto), 0), coalesce(sum(f.imp_total), 0), coalesce(sum(f.imp_exceso), 0),
+         min(f.fecha_desde), max(f.fecha_hasta)
+  from public.facturas_ok f
+  cross join (values ('consumo'), ('emision')) b(base)
+  cross join lateral (select case when b.base = 'emision' then f.fecha_emision else f.fecha_hasta end fecha) x
+  group by 1, 2, 3, 4;
+  insert into public.cache_info (id, actualizado, filas, facturas, excluidas, negativas, sustituidas)
+  select 1, now(), count(*), count(distinct id_factura), count(*) filter (where excluida),
+         count(*) filter (where negativa), count(*) filter (where sustituida)
+  from public.facturas
+  on conflict (id) do update set actualizado = excluded.actualizado, filas = excluded.filas, facturas = excluded.facturas,
+    excluidas = excluded.excluidas, negativas = excluded.negativas, sustituidas = excluded.sustituidas;
+  return jsonb_build_object('ms', round(extract(epoch from clock_timestamp() - t0) * 1000));
+end;
+$$;
+
 create or replace function public.anios(p_base text default 'consumo', p_tension text default null)
 returns int[] language sql stable as $$
-  select coalesce(array_agg(a order by a desc), '{}')
-  from (select distinct extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base))::int a
-        from public._ft(p_tension) f where public._fb(f.fecha_emision, f.fecha_hasta, p_base) is not null) s;
+  select coalesce(array_agg(distinct anio order by anio desc), '{}') from public.cache_mes
+  where base = p_base and anio is not null and (p_tension is null or tension = p_tension);
 $$;
 
 create or replace function public.resumen()
 returns jsonb language sql stable as $$
   select jsonb_build_object(
-    'filas',        (select count(*) from public.facturas),
-    'excluidas',    (select count(*) from public.facturas where excluida),
-    'negativas',    (select count(*) from public.facturas where negativa),
-    'sustituidas',  (select count(*) from public.facturas where sustituida),
+    'filas',        coalesce(i.filas, 0),
+    'excluidas',    coalesce(i.excluidas, 0),
+    'negativas',    coalesce(i.negativas, 0),
+    'sustituidas',  coalesce(i.sustituidas, 0),
+    'facturas',     coalesce(i.facturas, 0),
+    'cache',        i.actualizado,
     'pendientes',   (select count(*) from public.facturas where doc_agrupada is null),
-    'facturas',     (select count(distinct id_factura) from public.facturas),
     'ultima_carga', (select max(fecha) from public.cargas),
     'admin',        public.es_admin()
-  );
+  )
+  from (select 1) d left join public.cache_info i on i.id = 1;
 $$;
 
 create or replace function public.puntos(p_anio int default null, p_base text default 'consumo', p_tension text default null)
@@ -490,130 +563,114 @@ returns table (cups text, direccion text, distribuidora text, tarifa text, factu
                kwh numeric, neto numeric, total numeric, eur_kwh numeric, exceso_eur numeric,
                desde date, hasta date)
 language sql stable as $$
-  select f.cups,
-         (array_agg(f.direccion     order by f.fecha_hasta desc nulls last))[1],
-         (array_agg(f.distribuidora order by f.fecha_hasta desc nulls last))[1],
-         (array_agg(f.tarifa        order by f.fecha_hasta desc nulls last))[1],
-         count(distinct f.id_factura),
-         coalesce(sum(f.kwh), 0),
-         coalesce(sum(f.imp_neto), 0),
-         coalesce(sum(f.imp_total), 0),
-         case when sum(f.kwh) > 0 then sum(f.imp_neto) / sum(f.kwh) end,
-         coalesce(sum(f.imp_exceso), 0),
-         min(f.fecha_desde),
-         max(f.fecha_hasta)
-  from public._ft(p_tension) f
-  where p_anio is null or extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base)) = p_anio
-  group by f.cups
+  select c.cups,
+         (array_agg(c.direccion     order by c.ult desc nulls last))[1],
+         (array_agg(c.distribuidora order by c.ult desc nulls last))[1],
+         (array_agg(c.tarifa        order by c.ult desc nulls last))[1],
+         sum(c.facturas)::bigint, sum(c.kwh), sum(c.neto), sum(c.total),
+         case when sum(c.kwh) > 0 then sum(c.neto) / sum(c.kwh) end,
+         sum(c.exceso), min(c.desde), max(c.hasta)
+  from public.cache_cups c
+  where c.base = p_base and (p_anio is null or c.anio = p_anio) and (p_tension is null or c.tension = p_tension)
+  group by c.cups
   order by 6 desc;
+$$;
+
+-- piezas del dashboard (un año o todo el histórico si p_anio es null)
+create or replace function public._mensual(p_anio int, p_base text, p_tension text)
+returns jsonb language sql stable as $$
+  select jsonb_agg(jsonb_build_object('mes', g.mes, 'kwh', x.kwh, 'neto', x.neto, 'total', x.total,
+           'eur_kwh', case when x.kwh > 0 then x.neto / x.kwh end, 'facturas', coalesce(x.facturas, 0)) order by g.mes)
+  from generate_series(1, 12) g(mes)
+  left join (select mes, sum(kwh) kwh, sum(neto) neto, sum(total) total, sum(facturas) facturas
+             from public.cache_mes
+             where base = p_base and (p_anio is null or anio = p_anio) and (p_tension is null or tension = p_tension)
+             group by mes) x on x.mes = g.mes;
+$$;
+create or replace function public._periodos(p_anio int, p_base text, p_tension text)
+returns jsonb language sql stable as $$
+  select jsonb_build_array(
+    jsonb_build_object('periodo', 'P1', 'kwh', coalesce(sum(kwh_p1), 0)), jsonb_build_object('periodo', 'P2', 'kwh', coalesce(sum(kwh_p2), 0)),
+    jsonb_build_object('periodo', 'P3', 'kwh', coalesce(sum(kwh_p3), 0)), jsonb_build_object('periodo', 'P4', 'kwh', coalesce(sum(kwh_p4), 0)),
+    jsonb_build_object('periodo', 'P5', 'kwh', coalesce(sum(kwh_p5), 0)), jsonb_build_object('periodo', 'P6', 'kwh', coalesce(sum(kwh_p6), 0)))
+  from public.cache_mes
+  where base = p_base and (p_anio is null or anio = p_anio) and (p_tension is null or tension = p_tension);
+$$;
+create or replace function public._costes(p_anio int, p_base text, p_tension text)
+returns jsonb language sql stable as $$
+  select jsonb_agg(jsonb_build_object('concepto', c.k, 'eur', c.v) order by c.o)
+  from (select sum(energia) e, sum(potencia) p, sum(exceso) x, sum(alquiler) a, sum(ie) ie, sum(otros) o, sum(iva) iva, sum(total) t
+        from public.cache_mes
+        where base = p_base and (p_anio is null or anio = p_anio) and (p_tension is null or tension = p_tension)) s,
+  lateral (values
+    (1, 'Energía', coalesce(e, 0)), (2, 'Potencia contratada', coalesce(p, 0)), (3, 'Exceso de potencia', coalesce(x, 0)),
+    (4, 'Alquiler de equipos', coalesce(a, 0)), (5, 'Impuesto eléctrico', coalesce(ie, 0)), (6, 'Otros conceptos', coalesce(o, 0)),
+    (7, 'Otros ajustes', coalesce(t, 0) - coalesce(e, 0) - coalesce(p, 0) - coalesce(x, 0) - coalesce(a, 0) - coalesce(ie, 0) - coalesce(o, 0) - coalesce(iva, 0)),
+    (8, 'IVA / IGIC', coalesce(iva, 0))) c(o, k, v)
+  where c.k <> 'Otros ajustes' or abs(c.v) > 0.5;
 $$;
 
 create or replace function public.dashboard(p_anio int default null, p_base text default 'consumo', p_tension text default null)
 returns jsonb language plpgsql stable as $$
 declare
-  r jsonb;
   v_meses int[];
   v_fact bigint;
   v_prev jsonb := null;
+  v_hay_prev boolean := false;
 begin
-  select array_agg(distinct extract(month from public._fb(f.fecha_emision, f.fecha_hasta, p_base))::int),
-         count(distinct f.id_factura)
+  select array_agg(distinct mes) filter (where mes is not null), coalesce(sum(facturas), 0)
     into v_meses, v_fact
-  from public._ft(p_tension) f
-  where p_anio is null or extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base)) = p_anio;
+  from public.cache_mes
+  where base = p_base and (p_anio is null or anio = p_anio) and (p_tension is null or tension = p_tension);
 
   if v_fact = 0 then
-    return jsonb_build_object('vacio', true);
+    return jsonb_build_object('vacio', true, 'version', (select actualizado from public.cache_info where id = 1));
   end if;
 
   if p_anio is not null then
-    select case when count(distinct f.id_factura) >= 0.5 * v_fact then
-             jsonb_build_object('kwh', coalesce(sum(f.kwh), 0), 'neto', coalesce(sum(f.imp_neto), 0))
+    select count(*) > 0 into v_hay_prev from public.cache_mes
+    where base = p_base and anio = p_anio - 1 and (p_tension is null or tension = p_tension);
+    select case when sum(facturas) >= 0.5 * v_fact then
+             jsonb_build_object('kwh', coalesce(sum(kwh), 0), 'neto', coalesce(sum(neto), 0), 'total', coalesce(sum(total), 0),
+                                'meses', to_jsonb(v_meses))
            end
       into v_prev
-    from public._ft(p_tension) f
-    where extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base)) = p_anio - 1
-      and extract(month from public._fb(f.fecha_emision, f.fecha_hasta, p_base))::int = any (v_meses);
+    from public.cache_mes
+    where base = p_base and anio = p_anio - 1 and mes = any (v_meses) and (p_tension is null or tension = p_tension);
   end if;
 
-  with f as (
-    select f.*, public._fb(f.fecha_emision, f.fecha_hasta, p_base) as fecha
-    from public._ft(p_tension) f
-    where p_anio is null or extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base)) = p_anio
-  ),
-  kpi as (
+  return (
+    with m as (
+      select * from public.cache_mes
+      where base = p_base and (p_anio is null or anio = p_anio) and (p_tension is null or tension = p_tension)
+    ),
+    cu as (select * from public.puntos(p_anio, p_base, p_tension))
     select jsonb_build_object(
-      'kwh',            coalesce(sum(kwh), 0),
-      'neto',           coalesce(sum(imp_neto), 0),
-      'total',          coalesce(sum(imp_total), 0),
-      'eur_kwh',        case when sum(kwh) > 0 then sum(imp_neto) / sum(kwh) end,
-      'facturas',       count(distinct id_factura),
-      'anuladas',       count(distinct id_factura) filter (where estado in ('A', 'C') or negativa),
-      'rectificativas', count(distinct id_factura) filter (where estado = 'R'),
-      'puntos',         count(distinct cups) filter (where coalesce(kwh, 0) <> 0),
-      'puntos_total',   count(distinct cups),
-      'exceso_eur',     coalesce(sum(imp_exceso), 0),
-      'puntos_exceso',  count(distinct cups) filter (where imp_exceso > 0),
-      'ultima_emision', to_char(max(fecha_emision), 'DD/MM/YYYY')
-    ) j from f
-  ),
-  mens as (
-    select m.mes,
-           sum(f.kwh) kwh, sum(f.imp_neto) neto, sum(f.imp_total) total,
-           count(distinct f.id_factura) facturas
-    from generate_series(1, 12) m(mes)
-    left join f on extract(month from f.fecha)::int = m.mes
-    group by m.mes
-  ),
-  costes as (
-    select sum(imp_energia) e, sum(imp_potencia) p, sum(imp_exceso) x, sum(imp_alquiler) a,
-           sum(imp_ie) ie, sum(imp_otros) o, sum(imp_iva) iva, sum(imp_total) t
-    from f
-  ),
-  lect as (
-    select tipo_lectura, count(distinct id_factura) n
-    from f where tipo_lectura is not null group by tipo_lectura
-  )
-  select jsonb_build_object(
-    'vacio', false,
-    'anio',  p_anio,
-    'base',  p_base,
-    'tension', p_tension,
-    'kpi',   (select j from kpi),
-    'previo', case when v_prev is not null then v_prev || jsonb_build_object('meses', to_jsonb(v_meses)) end,
-    'mensual', (select jsonb_agg(jsonb_build_object(
-                  'mes', mes, 'kwh', kwh, 'neto', neto, 'total', total,
-                  'eur_kwh', case when kwh > 0 then neto / kwh end,
-                  'facturas', facturas) order by mes) from mens),
-    'periodos', (select jsonb_build_array(
-                  jsonb_build_object('periodo', 'P1', 'kwh', coalesce(sum(kwh_p1), 0)),
-                  jsonb_build_object('periodo', 'P2', 'kwh', coalesce(sum(kwh_p2), 0)),
-                  jsonb_build_object('periodo', 'P3', 'kwh', coalesce(sum(kwh_p3), 0)),
-                  jsonb_build_object('periodo', 'P4', 'kwh', coalesce(sum(kwh_p4), 0)),
-                  jsonb_build_object('periodo', 'P5', 'kwh', coalesce(sum(kwh_p5), 0)),
-                  jsonb_build_object('periodo', 'P6', 'kwh', coalesce(sum(kwh_p6), 0))) from f),
-    'costes', (select jsonb_agg(x) from (
-                  select jsonb_build_object('concepto', c.k, 'eur', c.v) x, c.o
-                  from costes, lateral (values
-                    (1, 'Energía', coalesce(e, 0)),
-                    (2, 'Potencia contratada', coalesce(p, 0)),
-                    (3, 'Exceso de potencia', coalesce(x, 0)),
-                    (4, 'Alquiler de equipos', coalesce(a, 0)),
-                    (5, 'Impuesto eléctrico', coalesce(ie, 0)),
-                    (6, 'Otros conceptos', coalesce(o, 0)),
-                    (7, 'Otros ajustes', coalesce(t, 0) - coalesce(e, 0) - coalesce(p, 0) - coalesce(x, 0)
-                                         - coalesce(a, 0) - coalesce(ie, 0) - coalesce(o, 0) - coalesce(iva, 0)),
-                    (8, 'IVA / IGIC', coalesce(iva, 0))) c(o, k, v)
-                  where c.k <> 'Otros ajustes' or abs(c.v) > 0.5
-                  order by c.o) s),
-    'top', (select coalesce(jsonb_agg(jsonb_build_object('cups', p.cups, 'direccion', p.direccion,
-                    'kwh', p.kwh, 'neto', p.neto, 'eur_kwh', p.eur_kwh)), '[]')
-            from (select * from public.puntos(p_anio, p_base, p_tension) limit 10) p),
-    'lecturas', (select coalesce(jsonb_agg(jsonb_build_object('tipo', tipo_lectura, 'facturas', n)
-                    order by n desc), '[]') from lect)
-  ) into r;
-
-  return r;
+      'vacio', false, 'anio', p_anio, 'base', p_base, 'tension', p_tension,
+      'version', (select actualizado from public.cache_info where id = 1),
+      'kpi', (select jsonb_build_object(
+          'kwh', coalesce(sum(kwh), 0), 'neto', coalesce(sum(neto), 0), 'total', coalesce(sum(total), 0),
+          'eur_kwh', case when sum(kwh) > 0 then sum(neto) / sum(kwh) end,
+          'facturas', coalesce(sum(facturas), 0),
+          'anuladas', coalesce(sum(facturas) filter (where estado in ('A', 'C')), 0),
+          'rectificativas', coalesce(sum(facturas) filter (where estado = 'R'), 0),
+          'exceso_eur', coalesce(sum(exceso), 0),
+          'puntos', (select count(*) from cu where coalesce(cu.kwh, 0) <> 0),
+          'puntos_total', (select count(*) from cu),
+          'puntos_exceso', (select count(*) from cu where cu.exceso_eur > 0)) from m),
+      'previo', v_prev,
+      'mensual', public._mensual(p_anio, p_base, p_tension),
+      'mensual_prev', case when v_hay_prev then public._mensual(p_anio - 1, p_base, p_tension) end,
+      'periodos', public._periodos(p_anio, p_base, p_tension),
+      'periodos_prev', case when v_hay_prev then public._periodos(p_anio - 1, p_base, p_tension) end,
+      'costes', public._costes(p_anio, p_base, p_tension),
+      'costes_prev', case when v_hay_prev then public._costes(p_anio - 1, p_base, p_tension) end,
+      'top', (select coalesce(jsonb_agg(jsonb_build_object('cups', t.cups, 'direccion', t.direccion,
+                'kwh', t.kwh, 'neto', t.neto, 'eur_kwh', t.eur_kwh)), '[]') from (select * from cu limit 10) t),
+      'lecturas', (select coalesce(jsonb_agg(jsonb_build_object('tipo', tipo_lectura, 'facturas', n) order by n desc), '[]')
+                   from (select tipo_lectura, sum(facturas) n from m where tipo_lectura is not null group by 1) l)
+    )
+  );
 end;
 $$;
 
@@ -628,14 +685,15 @@ begin
   delete from public.cargas where true;
   delete from public.cabeceras where true;
   -- las reglas de corrección se conservan
+  perform public.refrescar_cache();
 end;
 $$;
 
 grant execute on function public.anios(text, text), public.resumen(), public.puntos(int, text, text),
-                 public.dashboard(int, text, text), public.vaciar(), public.es_admin(),
+                 public.dashboard(int, text, text), public.vaciar(), public.es_admin(), public.refrescar_cache(),
                  public.correcciones_resumen(), public.valores_campo(text) to authenticated;
 revoke execute on function public.anios(text, text), public.resumen(), public.puntos(int, text, text),
-                  public.dashboard(int, text, text), public.vaciar() from anon, public;
+                  public.dashboard(int, text, text), public.vaciar(), public.refrescar_cache() from anon, public;
 
 
 -- ---------------------------------------------------------------- analítico del equipo
@@ -679,13 +737,10 @@ returns jsonb language sql stable as $$
     select * from public.analitico_cargas where anio = p_anio order by fecha desc, id desc limit 1
   ),
   nuestro as (
-    select extract(month from f.fecha_hasta)::int mes,
-           f.tension seg,
-           sum(f.kwh) kwh, sum(f.imp_energia) energia,
-           coalesce(sum(f.imp_potencia), 0) + coalesce(sum(f.imp_alquiler), 0) fijo,
-           sum(f.imp_neto) neto, count(distinct f.id_factura) facturas
-    from public.facturas_ok f
-    where extract(year from f.fecha_hasta) = p_anio
+    select mes, tension seg, sum(kwh) kwh, sum(energia) energia,
+           coalesce(sum(potencia), 0) + coalesce(sum(alquiler), 0) fijo, sum(neto) neto, sum(facturas) facturas
+    from public.cache_mes
+    where base = 'consumo' and anio = p_anio
     group by 1, 2
   )
   select jsonb_build_object(
@@ -709,3 +764,5 @@ notify pgrst, 'reload schema';
 -- Aplica las reglas de corrección a las facturas ya guardadas (rápido).
 -- La revisión de refacturaciones de las facturas antiguas la hace la web al entrar, por tandas.
 select public.recalcular_correcciones();
+-- Rellena la caché del dashboard
+select public.refrescar_cache();

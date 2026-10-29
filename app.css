@@ -275,3 +275,14 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .aviso .barra { grid-column: 1 / -1; margin-top: 2px; background: #cfe0f6; }
 .sk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: latido 1s ease-in-out infinite; }
 @keyframes latido { 50% { opacity: .3; } }
+
+/* ---------- año anterior (fantasma) ---------- */
+.chart .ghost { fill: var(--s1); opacity: .16; }
+.chart .line-prev { fill: none; stroke: var(--s1); stroke-opacity: .35; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.hb .t { position: relative; }
+.hb .f.g { background: var(--s1); opacity: .2; }
+.leyenda .swg { background: var(--s1); opacity: .25; }
+.leyenda .swl { height: 2px !important; width: 14px !important; border-radius: 1px !important; vertical-align: 3px !important; background: var(--s1); }
+.leyenda .swl.g { opacity: .4; }
+.tile .delta { font-size: 12px; }
+.delta .up { color: var(--good); } .delta .down { color: var(--bad); }
