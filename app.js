@@ -118,6 +118,7 @@ function frame(el, values, fmtAxis) {
 }
 
 function columnChart(el, data, { fmtAxis = fComp, tipFn }) {
+  if (el.clientWidth < 80) return;            // contenedor no visible: se pinta al volver
   const { svg, W, H, m, y } = frame(el, data.map((d) => d.value), fmtAxis);
   const band = (W - m.l - m.r) / data.length, bw = Math.min(24, band * 0.6);
   data.forEach((d, i) => {
@@ -140,6 +141,7 @@ function columnChart(el, data, { fmtAxis = fComp, tipFn }) {
 }
 
 function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn }) {
+  if (el.clientWidth < 80) return;
   const vals = data.map((d) => d.value).filter((v) => v != null);
   if (!vals.length) { el.innerHTML = '<p class="muted sm">Sin datos</p>'; return; }
   const lo = Math.min(...vals), hi = Math.max(...vals), pad = (hi - lo) * 0.25 || hi * 0.1 || 1;
@@ -213,6 +215,7 @@ async function cargarDashboard() {
   if (pedido !== JSON.stringify(args())) return;      // el usuario cambió el filtro mientras cargaba
   if (!d) return;
   DASH = d;
+  if (ST.vista !== 'inicio') return;                  // se ha cambiado de pantalla mientras cargaba
   if (!d.vacio) cargarCompMini(); else $('#cardComp').classList.add('hide');
   $('#vacio').classList.toggle('hide', !d.vacio);
   $('#dash').classList.toggle('hide', !!d.vacio);
@@ -307,7 +310,9 @@ function queryFacturas() {
   const t = $('#fQ').value.trim().replace(/[",()]/g, ' ');
   if (t) conds.push(`or(${['cups', 'direccion', 'id_factura', 'sheet_code'].map((c) => `${c}.ilike."*${t}*"`).join(',')})`);
   if (conds.length) q.and = `(${conds.join(',')})`;
-  if ($('#fEstado').value) q.estado = 'eq.' + $('#fEstado').value;
+  const est = $('#fEstado').value;
+  if (est === 'sust') q.sustituida = 'is.true';
+  else if (est) q.estado = 'eq.' + est;
   q.order = ST.f.orden ? `${ST.f.orden}.${ST.f.dir}.nullslast,huella` : 'fecha_emision.asc.nullslast,huella';
   return q;
 }
@@ -317,7 +322,7 @@ async function cargarFacturas() {
   q.select = todas ? COLS_F.map((c) => c[0]).join(',') + ',cabecera_id,valores' : COLS_F.map((c) => c[0]).join(',');
   q.limit = 50; q.offset = (ST.f.pag - 1) * 50;
   const tb = $('#tbFact'); skTabla(tb, 12);
-  q.select += ',negativa,excluida';
+  q.select += ',negativa,excluida,sustituida,motivo_sust';
   const r = await seguro(() => SB.select('facturas_calc', q, { count: true }));
   tb.classList.remove('loading');
   if (!r) return;
@@ -329,7 +334,7 @@ async function cargarFacturas() {
   tb.innerHTML = `<thead><tr>${COLS_F.map(([k, t, n]) => `<th data-c="${k}" class="${n === 'n' || n === 'e' ? 'num' : ''}">${esc(t)}${ST.f.orden === k ? `<span class="ar">${ST.f.dir === 'desc' ? '↓' : '↑'}</span>` : ''}</th>`).join('')}${extra.map((c) => `<th class="raw">${esc(c)}</th>`).join('')}</tr></thead><tbody>` +
     r.datos.map((f) => `<tr>${COLS_F.map(([k, , n]) => {
       const v = f[k];
-      if (k === 'estado') return `<td>${v ? `<span class="tag ${esc(v)}">${ESTADOS[v] || esc(v)}</span>` : ''}${f.negativa ? ' <span class="tag neg" title="Corrección: en negativo">−</span>' : ''}${f.excluida ? ' <span class="tag exc" title="Corrección: excluida de los cálculos">Excluida</span>' : ''}</td>`;
+      if (k === 'estado') return `<td>${v ? `<span class="tag ${esc(v)}">${ESTADOS[v] || esc(v)}</span>` : ''}${f.negativa ? ' <span class="tag neg" title="Corrección: en negativo">−</span>' : ''}${f.excluida ? ' <span class="tag exc" title="Corrección: excluida de los cálculos">Excluida</span>' : ''}${f.sustituida ? ` <span class="tag sust" title="${esc(f.motivo_sust || 'Sustituida')}">Sustituida</span>` : ''}</td>`;
       if (k === 'cups') return `<td class="cups">${esc(v)}</td>`;
       if (n === 'f') return `<td>${fFecha(v)}</td>`;
       if (n === 'n') return `<td class="num">${v == null ? '' : fN(v, Number.isInteger(+v) ? 0 : 2)}</td>`;
@@ -369,7 +374,7 @@ async function exportarFilas(q, nombre, boton) {
   const txt = boton.textContent; boton.disabled = true;
   try {
     const cabs = await cabeceras();
-    q.select = 'mes_emision,tension,sheet_code,archivo_origen,cabecera_id,valores,negativa,excluida';
+    q.select = 'mes_emision,tension,sheet_code,archivo_origen,cabecera_id,valores,negativa,excluida,sustituida,motivo_sust';
     const filas = await SB.todo((limit, offset) => SB.select('facturas_calc', { ...q, limit, offset }),
       (n) => { boton.textContent = `Descargando… ${fN(n)}`; });
     // columnas: unión de las cabeceras usadas, en orden de aparición
@@ -387,7 +392,7 @@ async function exportarFilas(q, nombre, boton) {
         else if (f.negativa && cambiaSigno[j]) { const x = num(v); if (x != null) v = -Math.abs(x); }
         row[j] = v;
       });
-      const corr = [f.negativa ? 'En negativo' : '', f.excluida ? 'Excluida' : ''].filter(Boolean).join(' · ');
+      const corr = [f.negativa ? 'En negativo' : '', f.excluida ? 'Excluida' : '', f.sustituida ? (f.motivo_sust || 'Sustituida') : ''].filter(Boolean).join(' · ');
       aoa.push([f.mes_emision, f.tension, f.sheet_code, f.archivo_origen, corr || null, ...row]);
     }
     boton.textContent = 'Generando Excel…';
@@ -454,6 +459,7 @@ async function exportarPuntos() {
 
 // ---------------------------------------------------------------- COMPARATIVA (analítico del equipo)
 function groupedChart(el, data, { fmtAxis = fComp, tipFn }) {
+  if (el.clientWidth < 80) return;
   const vals = data.flatMap((d) => [d.a, d.b]).filter((v) => v != null);
   const { svg, W, H, m, y } = frame(el, vals.length ? vals : [0], fmtAxis);
   const band = (W - m.l - m.r) / data.length, bw = Math.min(14, band * 0.32);
@@ -647,6 +653,24 @@ async function cargarCorrecciones() {
     datosCambiados(); cargarCorrecciones(); toast('Corrección borrada');
   });
   sugerirValores();
+  cargarSustituidas();
+}
+const OPC = { refacturaciones: ['Refacturaciones', 'refacturaciones'], copias_agrupadas: ['Copias en varias agrupadas', 'copias'] };
+async function cargarSustituidas() {
+  const r = await seguro(() => SB.rpc('sustituidas_resumen'));
+  if (!r) return;
+  $('#lsSust').innerHTML = (r.opciones || []).map((o) => {
+    const [titulo, k] = OPC[o.clave] || [o.clave, null]; const c = (k && r[k]) || { facturas: 0, kwh: 0 };
+    return `<div class="opcion">
+      <label class="sw"><input type="checkbox" class="oAct" data-k="${esc(o.clave)}" ${o.activa ? 'checked' : ''} ${ST.admin ? '' : 'disabled'}><span></span></label>
+      <div><b>${esc(titulo)}</b><span class="muted">${esc(o.descripcion || '')}</span></div>
+      <div class="cifra"><b>${fN(c.facturas)}</b> facturas<br><span class="muted">${fN(c.kwh)} kWh no contados</span></div></div>`;
+  }).join('') + `<p class="note">Para revisarlas: en <a href="#facturas">Facturas</a>, filtra por «Sustituidas (no cuentan)»; al pasar el ratón por la etiqueta se ve qué factura la sustituye.</p>`;
+  $$('.oAct').forEach((c) => c.onchange = async () => {
+    c.disabled = true;
+    await seguro(() => SB.update('opciones', { clave: 'eq.' + c.dataset.k }, { activa: c.checked }));
+    datosCambiados(); await cargarSustituidas(); toast(c.checked ? 'Regla activada y aplicada' : 'Regla desactivada');
+  });
 }
 async function sugerirValores() {
   const v = await seguro(() => SB.rpc('valores_campo', { p_campo: $('#rCampo').value }));
@@ -763,6 +787,9 @@ async function procesar() {
       }
       await SB.update('cargas', { id: 'eq.' + carga.id }, { leidas: tot.leidas, duplicadas_en_carga: tot.dup, ya_existentes: tot.guardadas - tot.nuevas, nuevas: tot.nuevas });
     }
+    progreso(99, 'Revisando refacturaciones y copias…');
+    const rs = await SB.rpc('recalcular_sustituidas');
+    if (rs?.sustituidas) log(`⇄ ${fN(rs.sustituidas)} filas marcadas como sustituidas (refacturaciones o copias): no se cuentan dos veces`);
     if (!tot.leidas) log('✖ No se encontró ningún dato.');
     if (tot.guardadas - tot.nuevas) log(`↷ ${fN(tot.guardadas - tot.nuevas)} filas ya estaban guardadas de cargas anteriores, se omiten`);
     log(`＋ ${fN(tot.nuevas)} filas nuevas guardadas`);

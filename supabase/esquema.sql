@@ -207,6 +207,139 @@ drop trigger if exists correcciones_cambio on public.correcciones;
 create trigger correcciones_cambio after insert or update or delete on public.correcciones
   for each statement execute function public.tg_correcciones();
 
+
+-- ---------------------------------------------------------------- facturas sustituidas
+-- Endesa a veces vuelve a emitir facturas (refacturación) sin que la original llegue anulada,
+-- o la misma pseudofactura aparece en varias facturas agrupadas. Estas reglas marcan como
+-- «sustituida» la versión antigua para que no se cuente dos veces (el dato no se borra).
+alter table public.facturas add column if not exists doc_agrupada   text;
+alter table public.facturas add column if not exists fecha_agrupada date;
+alter table public.facturas add column if not exists ajuste_de      text;
+alter table public.facturas add column if not exists sustituida     boolean not null default false;
+alter table public.facturas add column if not exists motivo_sust    text;
+create index if not exists facturas_id_idx      on public.facturas (id_factura);
+create index if not exists facturas_periodo_idx on public.facturas (cups, fecha_desde, fecha_hasta);
+
+-- valor de una columna original (por nombre) a partir de valores + cabecera
+create or replace function public._valor(p_valores jsonb, p_cabecera bigint, p_col text)
+returns text language sql stable as $$
+  select nullif(trim(p_valores ->> (array_position(c.columnas, p_col) - 1)), '')
+  from public.cabeceras c where c.id = p_cabecera and array_position(c.columnas, p_col) is not null;
+$$;
+
+create or replace function public._entero_txt(t text)
+returns text language sql immutable as $$
+  select case when t ~ '^-?[0-9]+(\.0+)?$' then regexp_replace(t, '\.0+$', '') else t end;
+$$;
+
+-- rellena los campos de agrupada/ajuste de las filas que no los tengan
+create or replace function public._rellenar_agrupada()
+returns void language sql security definer set search_path = public as $$
+  update public.facturas f set
+    doc_agrupada   = coalesce(public._entero_txt(public._valor(f.valores, f.cabecera_id, 'DOCUMENTO IMPRESIÓN')),
+                              public._valor(f.valores, f.cabecera_id, 'Nº FISCAL DE LA FACTURA AGRUPADA'), '-'),
+    fecha_agrupada = case when public._valor(f.valores, f.cabecera_id, 'FECHA EMISIÓN FACTURA AGRUPADA') ~ '^\d{4}-\d{2}-\d{2}'
+                          then left(public._valor(f.valores, f.cabecera_id, 'FECHA EMISIÓN FACTURA AGRUPADA'), 10)::date end,
+    ajuste_de      = public._entero_txt(public._valor(f.valores, f.cabecera_id, 'AJUSTE PSEUDO FACTURA'))
+  where f.doc_agrupada is null;
+$$;
+
+create table if not exists public.opciones (
+  clave       text primary key,
+  activa      boolean not null default true,
+  descripcion text
+);
+insert into public.opciones (clave, activa, descripcion) values
+  ('refacturaciones', true, 'Si un CUPS tiene varias facturas normales (N) para el mismo periodo, solo cuenta la emitida más tarde. Las facturas de ajuste no entran en esta regla.'),
+  ('copias_agrupadas', true, 'Si una misma pseudofactura aparece en varias facturas agrupadas, solo cuenta la de la agrupada más reciente.')
+on conflict (clave) do nothing;
+alter table public.opciones enable row level security;
+drop policy if exists opc_leer on public.opciones;
+drop policy if exists opc_admin on public.opciones;
+create policy opc_leer  on public.opciones for select to authenticated using (true);
+create policy opc_admin on public.opciones for update to authenticated using (public.es_admin()) with check (public.es_admin());
+revoke all on public.opciones from anon;
+grant select, update on public.opciones to authenticated;
+
+create or replace function public.recalcular_sustituidas()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_refact boolean := coalesce((select activa from public.opciones where clave = 'refacturaciones'), true);
+  v_copias boolean := coalesce((select activa from public.opciones where clave = 'copias_agrupadas'), true);
+  n int;
+begin
+  perform public._rellenar_agrupada();
+  with
+  -- 1) misma pseudofactura en varias agrupadas: gana la agrupada más reciente
+  docs as (
+    select id_factura, doc_agrupada, max(fecha_agrupada) fa, max(creado) cr
+    from public.facturas where v_copias and id_factura is not null
+    group by 1, 2
+  ),
+  doc_ok as (
+    select distinct on (id_factura) id_factura, doc_agrupada
+    from docs order by id_factura, fa desc nulls last, cr desc, doc_agrupada desc
+  ),
+  r1 as (
+    select f.huella, 'Copia en otra factura agrupada (cuenta la de la agrupada más reciente)'::text motivo
+    from public.facturas f join doc_ok d using (id_factura)
+    where f.doc_agrupada is distinct from d.doc_agrupada
+  ),
+  -- 2) refacturación: mismo CUPS y mismo periodo, varias facturas N: gana la emitida más tarde
+  inv as (
+    select id_factura, cups, fecha_desde, fecha_hasta, max(fecha_emision) fe
+    from public.facturas
+    where v_refact and estado = 'N' and ajuste_de is null and id_factura is not null
+      and cups is not null and fecha_desde is not null and fecha_hasta is not null
+    group by 1, 2, 3, 4
+  ),
+  ganador as (
+    select distinct on (cups, fecha_desde, fecha_hasta) cups, fecha_desde, fecha_hasta, id_factura, fe
+    from inv order by cups, fecha_desde, fecha_hasta, fe desc nulls last, id_factura desc
+  ),
+  r2 as (
+    select f.huella, 'Refacturada: la sustituye la factura ' || g.id_factura || ' (emitida ' || to_char(g.fe, 'DD/MM/YYYY') || ')' motivo
+    from public.facturas f
+    join inv i on i.id_factura = f.id_factura
+    join ganador g on g.cups = i.cups and g.fecha_desde = i.fecha_desde and g.fecha_hasta = i.fecha_hasta
+    where i.id_factura <> g.id_factura
+  ),
+  marcas as (
+    select huella, string_agg(motivo, ' · ') motivo from (select * from r1 union all select * from r2) x group by huella
+  )
+  update public.facturas f
+     set sustituida = m.huella is not null, motivo_sust = m.motivo
+    from public.facturas f2 left join marcas m on m.huella = f2.huella
+   where f.huella = f2.huella
+     and (f.sustituida is distinct from (m.huella is not null) or f.motivo_sust is distinct from m.motivo);
+  get diagnostics n = row_count;
+  return jsonb_build_object('cambiadas', n,
+    'sustituidas', (select count(*) from public.facturas where sustituida),
+    'kwh_sustituidos', (select coalesce(sum(kwh), 0) from public.facturas where sustituida));
+end;
+$$;
+
+create or replace function public.tg_opciones()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin perform public.recalcular_sustituidas(); return null; end;
+$$;
+drop trigger if exists opciones_cambio on public.opciones;
+create trigger opciones_cambio after update on public.opciones
+  for each statement execute function public.tg_opciones();
+
+-- resumen de lo que hacen las reglas automáticas
+create or replace function public.sustituidas_resumen()
+returns jsonb language sql stable as $$
+  select jsonb_build_object(
+    'opciones', (select jsonb_agg(to_jsonb(o) order by o.clave) from public.opciones o),
+    'refacturaciones', (select jsonb_build_object('filas', count(*), 'facturas', count(distinct id_factura), 'kwh', coalesce(sum(kwh), 0))
+                        from public.facturas where sustituida and motivo_sust like '%Refacturada%'),
+    'copias', (select jsonb_build_object('filas', count(*), 'facturas', count(distinct id_factura), 'kwh', coalesce(sum(kwh), 0))
+               from public.facturas where sustituida and motivo_sust like '%Copia%'));
+$$;
+grant execute on function public.recalcular_sustituidas(), public.sustituidas_resumen() to authenticated;
+revoke execute on function public.recalcular_sustituidas(), public.sustituidas_resumen() from anon, public;
+
 -- Tensión según la tarifa de acceso: 6.x = media tensión (MT); el resto, baja tensión (BT)
 create or replace function public._tension(tarifa text)
 returns text language sql immutable as $$
@@ -228,13 +361,14 @@ select f.huella, f.carga_id, f.cabecera_id, f.sheet_code, f.archivo_origen, f.id
        public._neg(f.imp_exceso, c.negativa) imp_exceso,     public._neg(f.imp_alquiler, c.negativa) imp_alquiler,
        public._neg(f.imp_ie, c.negativa) imp_ie,             public._neg(f.imp_otros, c.negativa) imp_otros,
        public._neg(f.imp_iva, c.negativa) imp_iva,
-       public._tension(f.tarifa) tension
+       public._tension(f.tarifa) tension,
+       f.sustituida, f.motivo_sust
 from public.facturas f
 cross join lateral (select f.negativa, f.excluida) c;
 
 -- Solo las filas que cuentan (sin excluidas): base de todos los cálculos
 create or replace view public.facturas_ok with (security_invoker = true) as
-select * from public.facturas_calc where not excluida;
+select * from public.facturas_calc where not excluida and not sustituida;
 
 -- Filas que cuentan, filtradas por tensión (null = todas)
 create or replace function public._ft(p_tension text)
@@ -290,6 +424,7 @@ returns jsonb language sql stable as $$
     'filas',        (select count(*) from public.facturas),
     'excluidas',    (select count(*) from public.facturas where excluida),
     'negativas',    (select count(*) from public.facturas where negativa),
+    'sustituidas',  (select count(*) from public.facturas where sustituida),
     'facturas',     (select count(distinct id_factura) from public.facturas),
     'ultima_carga', (select max(fecha) from public.cargas),
     'admin',        public.es_admin()
@@ -515,6 +650,8 @@ revoke execute on function public.comparativa(int) from anon, public;
 -- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)
 alter role authenticated set statement_timeout = '30s';
 notify pgrst, 'reload config';
+notify pgrst, 'reload schema';
 
 -- Aplica las reglas actuales a las facturas ya guardadas
 select public.recalcular_correcciones();
+select public.recalcular_sustituidas();

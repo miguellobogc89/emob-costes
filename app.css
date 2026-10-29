@@ -265,3 +265,9 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .tbl tr.tot td { font-weight: 600; background: #fafbfc; }
 @media (max-width: 1200px) { .comp-stats { grid-template-columns: 1fr 1fr; } }
 .pill-bt { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+.tag.sust { background: #fff4df; color: #8a5a00; }
+.opcion { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid #f0f1f4; }
+.opcion:last-child { border-bottom: 0; }
+.opcion b { display: block; }
+.opcion .muted { font-size: 13px; }
+.opcion .cifra { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

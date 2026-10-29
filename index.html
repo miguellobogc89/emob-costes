@@ -141,7 +141,7 @@
           <input type="search" id="fQ" placeholder="Buscar CUPS, dirección, ID factura, pestaña…">
           <select id="fEstado">
             <option value="">Todos los estados</option>
-            <option value="N">Normal</option><option value="A">Anuladora (A)</option><option value="C">Anulada (C)</option><option value="R">Rectificativa</option>
+            <option value="N">Normal</option><option value="A">Anuladora (A)</option><option value="C">Anulada (C)</option><option value="R">Rectificativa</option><option value="sust">Sustituidas (no cuentan)</option>
           </select>
           <label class="chk"><input type="checkbox" id="fTodas"> Todas las columnas</label>
           <span class="grow"></span>
@@ -219,6 +219,10 @@
       <div class="card">
         <div class="card-h"><h3>Reglas de corrección</h3><span class="muted sm">Se aplican a todos los cálculos al momento. El dato original no se modifica.</span></div>
         <div class="tbl-wrap"><table class="tbl" id="tbReglas"></table></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Facturas sustituidas (automático)</h3><span class="muted sm">Evita contar dos veces una factura que Endesa ha vuelto a emitir</span></div>
+        <div id="lsSust" class="stack"></div>
       </div>
       <div class="card" id="cardNuevaRegla">
         <div class="card-h"><h3>Añadir corrección</h3></div>
