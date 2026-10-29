@@ -322,7 +322,7 @@ async function cargarFacturas() {
   q.select = todas ? COLS_F.map((c) => c[0]).join(',') + ',cabecera_id,valores' : COLS_F.map((c) => c[0]).join(',');
   q.limit = 50; q.offset = (ST.f.pag - 1) * 50;
   const tb = $('#tbFact'); skTabla(tb, 12);
-  q.select += ',negativa,excluida,sustituida,motivo_sust';
+  q.select += ',negativa,excluida,sustituida,motivo_sust,anomala';
   const r = await seguro(() => SB.select('facturas_calc', q, { count: true }));
   tb.classList.remove('loading');
   if (!r) return;
@@ -334,7 +334,7 @@ async function cargarFacturas() {
   tb.innerHTML = `<thead><tr>${COLS_F.map(([k, t, n]) => `<th data-c="${k}" class="${n === 'n' || n === 'e' ? 'num' : ''}">${esc(t)}${ST.f.orden === k ? `<span class="ar">${ST.f.dir === 'desc' ? '↓' : '↑'}</span>` : ''}</th>`).join('')}${extra.map((c) => `<th class="raw">${esc(c)}</th>`).join('')}</tr></thead><tbody>` +
     r.datos.map((f) => `<tr>${COLS_F.map(([k, , n]) => {
       const v = f[k];
-      if (k === 'estado') return `<td>${v ? `<span class="tag ${esc(v)}">${ESTADOS[v] || esc(v)}</span>` : ''}${f.negativa ? ' <span class="tag neg" title="Corrección: en negativo">−</span>' : ''}${f.excluida ? ' <span class="tag exc" title="Corrección: excluida de los cálculos">Excluida</span>' : ''}${f.sustituida ? ` <span class="tag sust" title="${esc(f.motivo_sust || 'Sustituida')}">Sustituida</span>` : ''}</td>`;
+      if (k === 'estado') return `<td>${v ? `<span class="tag ${esc(v)}">${ESTADOS[v] || esc(v)}</span>` : ''}${f.negativa ? ' <span class="tag neg" title="Corrección: en negativo">−</span>' : ''}${f.excluida ? ' <span class="tag exc" title="Corrección: excluida de los cálculos">Excluida</span>' : ''}${f.sustituida ? ` <span class="tag sust" title="${esc(f.motivo_sust || 'Sustituida')}">Sustituida</span>` : ''}${f.anomala ? ' <span class="tag exc" title="Consumo de más de 1.000.000 kWh (p. ej. vuelta del contador): sus kWh no se cuentan, los importes sí">kWh anómalo</span>' : ''}</td>`;
       if (k === 'cups') return `<td class="cups">${esc(v)}</td>`;
       if (n === 'f') return `<td>${fFecha(v)}</td>`;
       if (n === 'n') return `<td class="num">${v == null ? '' : fN(v, Number.isInteger(+v) ? 0 : 2)}</td>`;
@@ -374,7 +374,7 @@ async function exportarFilas(q, nombre, boton) {
   const txt = boton.textContent; boton.disabled = true;
   try {
     const cabs = await cabeceras();
-    q.select = 'mes_emision,tension,sheet_code,archivo_origen,cabecera_id,valores,negativa,excluida,sustituida,motivo_sust';
+    q.select = 'mes_emision,tension,sheet_code,archivo_origen,cabecera_id,valores,negativa,excluida,sustituida,motivo_sust,anomala';
     const filas = await SB.todo((limit, offset) => SB.select('facturas_calc', { ...q, limit, offset }),
       (n) => { boton.textContent = `Descargando… ${fN(n)}`; });
     // columnas: unión de las cabeceras usadas, en orden de aparición
@@ -392,7 +392,7 @@ async function exportarFilas(q, nombre, boton) {
         else if (f.negativa && cambiaSigno[j]) { const x = num(v); if (x != null) v = -Math.abs(x); }
         row[j] = v;
       });
-      const corr = [f.negativa ? 'En negativo' : '', f.excluida ? 'Excluida' : '', f.sustituida ? (f.motivo_sust || 'Sustituida') : ''].filter(Boolean).join(' · ');
+      const corr = [f.negativa ? 'En negativo' : '', f.excluida ? 'Excluida' : '', f.sustituida ? (f.motivo_sust || 'Sustituida') : '', f.anomala ? 'kWh anómalo (no cuenta)' : ''].filter(Boolean).join(' · ');
       aoa.push([f.mes_emision, f.tension, f.sheet_code, f.archivo_origen, corr || null, ...row]);
     }
     boton.textContent = 'Generando Excel…';
@@ -629,6 +629,8 @@ const CAMPOS = { estado: 'Estado de la factura', id_factura: 'ID factura', cups:
 const ACCIONES = { negativo: 'Poner en negativo', excluir: 'Excluir de los cálculos' };
 async function cargarCorrecciones() {
   skTabla($('#tbReglas'), 9, 2);
+  if (!$('#lsSust .opcion')) $('#lsSust').innerHTML = Array.from({ length: 3 }, () => `<div class="opcion">${sk('34px', '20px')}<div>${sk('160px')}<br>${sk('80%')}</div><div class="cifra">${sk('80px')}</div></div>`).join('');
+  cargarSustituidas();   // en paralelo con las reglas manuales
   const reglas = await seguro(() => SB.rpc('correcciones_resumen'));
   if (!reglas) return;
   const adm = ST.admin;
@@ -653,9 +655,8 @@ async function cargarCorrecciones() {
     datosCambiados(); cargarCorrecciones(); toast('Corrección borrada');
   });
   sugerirValores();
-  cargarSustituidas();
 }
-const OPC = { refacturaciones: ['Refacturaciones', 'refacturaciones'], copias_agrupadas: ['Copias en varias agrupadas', 'copias'] };
+const OPC = { refacturaciones: ['Refacturaciones', 'refacturaciones'], copias_agrupadas: ['Copias en varias agrupadas', 'copias'], consumos_anomalos: ['Consumos anómalos', 'anomalos'] };
 async function cargarSustituidas() {
   const r = await seguro(() => SB.rpc('sustituidas_resumen'));
   if (!r) return;
@@ -664,7 +665,7 @@ async function cargarSustituidas() {
     return `<div class="opcion">
       <label class="sw"><input type="checkbox" class="oAct" data-k="${esc(o.clave)}" ${o.activa ? 'checked' : ''} ${ST.admin ? '' : 'disabled'}><span></span></label>
       <div><b>${esc(titulo)}</b><span class="muted">${esc(o.descripcion || '')}</span></div>
-      <div class="cifra"><b>${fN(c.facturas)}</b> facturas<br><span class="muted">${fN(c.kwh)} kWh no contados</span></div></div>`;
+      <div class="cifra"><b>${fN(c.facturas)}</b> facturas<br><span class="muted">${fN(c.kwh)} kWh ${o.clave === 'consumos_anomalos' ? 'ignorados' : 'no contados'}</span></div></div>`;
   }).join('') + `<p class="note">Para revisarlas: en <a href="#facturas">Facturas</a>, filtra por «Sustituidas (no cuentan)»; al pasar el ratón por la etiqueta se ve qué factura la sustituye.</p>`;
   $$('.oAct').forEach((c) => c.onchange = async () => {
     c.disabled = true;

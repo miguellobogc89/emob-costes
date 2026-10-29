@@ -104,8 +104,19 @@ function leerLibro(nombre, datos, log) {
     const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sh], { header: 1, raw: true, defval: null, blankrows: false });
     if (aoa.length < 2) { log(`   · ${nombre} › ${sh}: vacía, se omite`); continue; }
     const columnas = aoa[0].map((c, i) => (c == null || String(c).trim() === '' ? `Unnamed: ${i}` : String(c).trim()));
+    const N = columnas.map(norm);
+    // solo pestañas de facturas (p. ej. en 2025 algunas agrupadas traen una pestaña «Importe factura» de resumen)
+    if (!N.includes('ID PSEUDOFACTURA')) { log(`   · ${nombre} › ${sh}: no es una pestaña de facturas (resumen), se omite`); continue; }
     const filas = aoa.slice(1).filter((r) => r.some((v) => v !== null && v !== ''));
     if (!filas.length) continue;
+    // control: la suma de las facturas de la pestaña debe cuadrar con el total de la factura agrupada
+    const iT = N.indexOf('IMPORTE TOTAL PSEUDO'), iA = N.indexOf('IMPORTE TOTAL FACTURA AGRUPADA');
+    if (iT >= 0 && iA >= 0) {
+      const suma = filas.reduce((a, r) => a + (num(r[iT]) || 0), 0);
+      const agr = num(filas.find((r) => num(r[iA]) != null)?.[iA]);
+      if (agr != null && Math.abs(suma - agr) > 1)
+        log(`⚠ ${nombre} › ${sh}: las facturas suman ${suma.toFixed(2)} € y la agrupada dice ${agr.toFixed(2)} € (diferencia ${(suma - agr).toFixed(2)} €)`);
+    }
     partes.push({ sheet: sh, columnas, filas: filas.map((r) => columnas.map((_, i) => (r[i] === undefined ? null : r[i]))) });
   }
   log(`✔ ${nombre}: ${partes.length} pestañas, ${partes.reduce((a, p) => a + p.filas.length, 0)} filas`);

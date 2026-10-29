@@ -290,7 +290,8 @@ create table if not exists public.opciones (
 );
 insert into public.opciones (clave, activa, descripcion) values
   ('refacturaciones', true, 'Si un CUPS tiene varias facturas normales (N) para el mismo periodo, solo cuenta la emitida más tarde. Las facturas de ajuste no entran en esta regla.'),
-  ('copias_agrupadas', true, 'Si una misma pseudofactura aparece en varias facturas agrupadas, solo cuenta la de la agrupada más reciente.')
+  ('copias_agrupadas', true, 'Si una misma pseudofactura aparece en varias facturas agrupadas, solo cuenta la de la agrupada más reciente.'),
+  ('consumos_anomalos', true, 'Si una fila trae un consumo (total o por periodo) de más de 1.000.000 kWh, en positivo o negativo (p. ej. vuelta del contador), sus kWh no se cuentan; los importes sí.')
 on conflict (clave) do nothing;
 alter table public.opciones enable row level security;
 drop policy if exists opc_leer on public.opciones;
@@ -374,7 +375,11 @@ returns jsonb language sql stable as $$
     'refacturaciones', (select jsonb_build_object('filas', count(*), 'facturas', count(distinct id_factura), 'kwh', coalesce(sum(kwh), 0))
                         from public.facturas where sustituida and motivo_sust like '%Refacturada%'),
     'copias', (select jsonb_build_object('filas', count(*), 'facturas', count(distinct id_factura), 'kwh', coalesce(sum(kwh), 0))
-               from public.facturas where sustituida and motivo_sust like '%Copia%'));
+               from public.facturas where sustituida and motivo_sust like '%Copia%'),
+    'anomalos', (select jsonb_build_object('filas', count(*), 'facturas', count(distinct f.id_factura), 'kwh', coalesce(sum(f.kwh), 0))
+                 from public.facturas f
+                 where greatest(abs(coalesce(f.kwh, 0)), abs(coalesce(f.kwh_p1, 0)), abs(coalesce(f.kwh_p2, 0)), abs(coalesce(f.kwh_p3, 0)),
+                                abs(coalesce(f.kwh_p4, 0)), abs(coalesce(f.kwh_p5, 0)), abs(coalesce(f.kwh_p6, 0))) > 1000000));
 $$;
 grant execute on function public.recalcular_sustituidas(), public.sustituidas_resumen(), public.rellenar_pendientes(int) to authenticated;
 revoke execute on function public.recalcular_sustituidas(), public.sustituidas_resumen(), public.rellenar_pendientes(int) from anon, public;
@@ -391,19 +396,28 @@ select f.huella, f.carga_id, f.cabecera_id, f.sheet_code, f.archivo_origen, f.id
        f.direccion, f.distribuidora, f.tarifa, f.tipo_lectura, f.fecha_emision, f.fecha_desde, f.fecha_hasta,
        f.mes_emision, f.valores, f.creado,
        c.negativa, c.excluida,
-       public._neg(f.kwh, c.negativa) kwh,
-       public._neg(f.kwh_p1, c.negativa) kwh_p1, public._neg(f.kwh_p2, c.negativa) kwh_p2,
-       public._neg(f.kwh_p3, c.negativa) kwh_p3, public._neg(f.kwh_p4, c.negativa) kwh_p4,
-       public._neg(f.kwh_p5, c.negativa) kwh_p5, public._neg(f.kwh_p6, c.negativa) kwh_p6,
+       case when an.anomala then null else public._neg(f.kwh, c.negativa) end kwh,
+       case when an.anomala then null else public._neg(f.kwh_p1, c.negativa) end kwh_p1,
+       case when an.anomala then null else public._neg(f.kwh_p2, c.negativa) end kwh_p2,
+       case when an.anomala then null else public._neg(f.kwh_p3, c.negativa) end kwh_p3,
+       case when an.anomala then null else public._neg(f.kwh_p4, c.negativa) end kwh_p4,
+       case when an.anomala then null else public._neg(f.kwh_p5, c.negativa) end kwh_p5,
+       case when an.anomala then null else public._neg(f.kwh_p6, c.negativa) end kwh_p6,
        public._neg(f.imp_neto, c.negativa) imp_neto,         public._neg(f.imp_total, c.negativa) imp_total,
        public._neg(f.imp_energia, c.negativa) imp_energia,   public._neg(f.imp_potencia, c.negativa) imp_potencia,
        public._neg(f.imp_exceso, c.negativa) imp_exceso,     public._neg(f.imp_alquiler, c.negativa) imp_alquiler,
        public._neg(f.imp_ie, c.negativa) imp_ie,             public._neg(f.imp_otros, c.negativa) imp_otros,
        public._neg(f.imp_iva, c.negativa) imp_iva,
        public._tension(f.tarifa) tension,
-       f.sustituida, f.motivo_sust
+       f.sustituida, f.motivo_sust,
+       an.anomala
 from public.facturas f
-cross join lateral (select f.negativa, f.excluida) c;
+cross join lateral (select f.negativa, f.excluida) c
+cross join lateral (
+  select coalesce((select o.activa from public.opciones o where o.clave = 'consumos_anomalos'), true)
+     and greatest(abs(coalesce(f.kwh, 0)), abs(coalesce(f.kwh_p1, 0)), abs(coalesce(f.kwh_p2, 0)), abs(coalesce(f.kwh_p3, 0)),
+                  abs(coalesce(f.kwh_p4, 0)), abs(coalesce(f.kwh_p5, 0)), abs(coalesce(f.kwh_p6, 0))) > 1000000 as anomala
+) an;
 
 -- Solo las filas que cuentan (sin excluidas): base de todos los cálculos
 create or replace view public.facturas_ok with (security_invoker = true) as
