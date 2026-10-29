@@ -900,7 +900,9 @@ async function refrescarAnios() {
   }
   ST.admin = !!res.admin;
   LS.set(claveA, anios);
-  if (res.pendientes > 0 || res.por_mover > 0) prepararPendientes(res.pendientes, res.por_mover || 0);
+  // (el traslado de la fila original a su tabla aparte queda en pausa: haría crecer la base
+  //  temporalmente por encima del límite del plan gratuito)
+  if (res.pendientes > 0) prepararPendientes(res.pendientes, 0);
   const sel = $('#selAnio'), prev = ST.anio;
   sel.innerHTML = anios.map((a) => `<option value="${a}">${a}</option>`).join('') + '<option value="">Todo el histórico</option>';
   ST.anio = (prev === null && ST.todo) ? null : anios.includes(prev) ? prev : (anios[0] ?? null);
@@ -995,7 +997,7 @@ function init() {
   $('#btnActualizar').onclick = async (e) => {
     const b = e.currentTarget; b.classList.add('girando'); b.disabled = true;
     const res = await seguro(() => SB.rpc('resumen'));
-    if (res && (res.pendientes > 0 || res.por_mover > 0)) prepararPendientes(res.pendientes, res.por_mover || 0);
+    if (res && res.pendientes > 0) prepararPendientes(res.pendientes, 0);
     else await seguro(() => SB.rpc('refrescar_cache'));
     datosCambiados(); CABS = null;
     await refrescarAnios(); await Promise.resolve(refrescar());
