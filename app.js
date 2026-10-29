@@ -526,13 +526,19 @@ async function procesar() {
         tot.leidas += partes.reduce((a, p) => a + p.filas.length, 0);
         const { filas, dup } = await prepararFilas(e.nombre, partes, vistas, log);
         tot.dup += dup;
-        const LOTE = 200;
+        const LOTE = 150;
         for (let i = 0; i < filas.length; i += LOTE) {
+          const trozo = filas.slice(i, i + LOTE);
+          // primero se pregunta qué filas existen ya (solo huellas): esas no se vuelven a enviar
+          const ya = new Set((await SB.select('facturas', { select: 'huella', huella: `in.(${trozo.map((f) => f.huella).join(',')})` })).map((x) => x.huella));
           const lote = [];
-          for (const { _cab, _columnas, ...f } of filas.slice(i, i + LOTE)) lote.push({ ...f, cabecera_id: await idCabecera(_cab, _columnas), carga_id: carga.id });
-          const ins = await SB.insert('facturas', lote, { query: { on_conflict: 'huella', select: 'huella' }, prefer: 'return=representation,resolution=ignore-duplicates' });
-          tot.nuevas += ins.length; tot.guardadas += lote.length;
-          progreso(base + ((i + lote.length) / filas.length) * (100 / cola.length / excels.length), `${etiqueta} · guardando ${fN(i + lote.length)} / ${fN(filas.length)}`);
+          for (const { _cab, _columnas, ...f } of trozo) if (!ya.has(f.huella)) lote.push({ ...f, cabecera_id: await idCabecera(_cab, _columnas), carga_id: carga.id });
+          if (lote.length) {
+            const ins = await SB.insert('facturas', lote, { query: { on_conflict: 'huella', select: 'huella' }, prefer: 'return=representation,resolution=ignore-duplicates' });
+            tot.nuevas += ins.length;
+          }
+          tot.guardadas += trozo.length;
+          progreso(base + ((i + trozo.length) / filas.length) * (100 / cola.length / excels.length), `${etiqueta} · ${fN(i + trozo.length)} / ${fN(filas.length)} filas revisadas · ${fN(tot.nuevas)} nuevas`);
         }
         pintarKpis();
       }
