@@ -162,6 +162,51 @@ returns numeric language sql immutable as $$ select case when neg then -abs(v) e
 create or replace function public._fb(emision date, hasta date, p_base text)
 returns date language sql immutable as $$ select case when p_base = 'emision' then emision else hasta end; $$;
 
+-- Las marcas de corrección se guardan en cada fila (rápido de consultar) y se recalculan
+-- solo al insertar facturas o al cambiar las reglas.
+alter table public.facturas add column if not exists negativa boolean not null default false;
+alter table public.facturas add column if not exists excluida boolean not null default false;
+
+create or replace function public.tg_facturas_marcas()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  new.negativa := public._regla(new, 'negativo');
+  new.excluida := public._regla(new, 'excluir');
+  return new;
+end;
+$$;
+drop trigger if exists facturas_marcas on public.facturas;
+create trigger facturas_marcas before insert on public.facturas
+  for each row execute function public.tg_facturas_marcas();
+
+create or replace function public.recalcular_correcciones()
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update public.facturas f
+     set negativa = m.neg, excluida = m.exc
+    from (select f2.huella,
+                 coalesce(bool_or(r.accion = 'negativo'), false) neg,
+                 coalesce(bool_or(r.accion = 'excluir'), false) exc
+            from public.facturas f2
+            left join public.correcciones r
+              on r.activa and upper(trim(r.valor)) = upper(trim(public._campo(f2, r.campo)))
+           group by f2.huella) m
+   where m.huella = f.huella
+     and (f.negativa <> m.neg or f.excluida <> m.exc);
+end;
+$$;
+
+create or replace function public.tg_correcciones()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  perform public.recalcular_correcciones();
+  return null;
+end;
+$$;
+drop trigger if exists correcciones_cambio on public.correcciones;
+create trigger correcciones_cambio after insert or update or delete on public.correcciones
+  for each statement execute function public.tg_correcciones();
+
 -- Facturas con las correcciones aplicadas (todas las filas, con marcas)
 create or replace view public.facturas_calc with (security_invoker = true) as
 select f.huella, f.carga_id, f.cabecera_id, f.sheet_code, f.archivo_origen, f.id_factura, f.estado, f.cups,
@@ -178,7 +223,7 @@ select f.huella, f.carga_id, f.cabecera_id, f.sheet_code, f.archivo_origen, f.id
        public._neg(f.imp_ie, c.negativa) imp_ie,             public._neg(f.imp_otros, c.negativa) imp_otros,
        public._neg(f.imp_iva, c.negativa) imp_iva
 from public.facturas f
-cross join lateral (select public._regla(f, 'negativo') negativa, public._regla(f, 'excluir') excluida) c;
+cross join lateral (select f.negativa, f.excluida) c;
 
 -- Solo las filas que cuentan (sin excluidas): base de todos los cálculos
 create or replace view public.facturas_ok with (security_invoker = true) as
@@ -225,8 +270,8 @@ create or replace function public.resumen()
 returns jsonb language sql stable as $$
   select jsonb_build_object(
     'filas',        (select count(*) from public.facturas),
-    'excluidas',    (select count(*) from public.facturas_calc where excluida),
-    'negativas',    (select count(*) from public.facturas_calc where negativa),
+    'excluidas',    (select count(*) from public.facturas where excluida),
+    'negativas',    (select count(*) from public.facturas where negativa),
     'facturas',     (select count(distinct id_factura) from public.facturas),
     'ultima_carga', (select max(fecha) from public.cargas),
     'admin',        public.es_admin()
@@ -383,3 +428,11 @@ grant execute on function public.anios(text), public.resumen(), public.puntos(in
                  public.correcciones_resumen(), public.valores_campo(text) to authenticated;
 revoke execute on function public.anios(text), public.resumen(), public.puntos(int, text),
                   public.dashboard(int, text), public.vaciar() from anon, public;
+
+-- ---------------------------------------------------------------- ajustes finales
+-- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)
+alter role authenticated set statement_timeout = '30s';
+notify pgrst, 'reload config';
+
+-- Aplica las reglas actuales a las facturas ya guardadas
+select public.recalcular_correcciones();
