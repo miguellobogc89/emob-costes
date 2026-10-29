@@ -94,6 +94,7 @@ function traducirError(m) {
   if (/email not confirmed/i.test(t)) return 'El email aún no está confirmado.';
   if (/password should be at least/i.test(t)) return 'La contraseña es demasiado corta (mínimo 6 caracteres).';
   if (/row-level security|permission denied/i.test(t)) return 'No tienes permiso para esta acción.';
+  if (/statement timeout/i.test(t)) return 'El servidor ha tardado demasiado. Pulsa «Actualizar» para reintentarlo.';
   if (/Failed to fetch|NetworkError/i.test(t)) return 'No se puede conectar con el servidor. Revisa la conexión.';
   return t;
 }

@@ -23,6 +23,32 @@ function toast(msg, ms = 4000) {
   const t = $('#toast'); t.textContent = msg; t.classList.remove('hide');
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hide'), ms);
 }
+// ---------------------------------------------------------------- esqueletos
+const sk = (w, h = '0.9em') => `<span class="sk" style="width:${w};height:${h}"></span>`;
+const ALTOS = [52, 48, 60, 57, 34, 28, 36, 30, 80, 44, 38, 50];
+function skDashboard() {
+  $('#vacio').classList.add('hide'); $('#dash').classList.remove('hide');
+  $('#kKwh').innerHTML = sk('150px', '44px'); $('#kDelta').innerHTML = ''; $('#kHeroSub').innerHTML = sk('75%');
+  for (const id of ['#kNeto', '#kEurKwh', '#kPuntos', '#kExceso']) $(id).innerHTML = sk('110px', '26px');
+  for (const id of ['#kTotal', '#kFacturas', '#kExcesoSub']) $(id).innerHTML = sk('80%');
+  $('#chMensual').innerHTML = `<div class="sk-cols">${ALTOS.map((h) => `<span class="sk" style="height:${h}%"></span>`).join('')}</div>`;
+  $('#chEurKwh').innerHTML = `<div class="sk-line"><span class="sk"></span><span class="sk onda"></span><span class="sk"></span><span class="sk"></span></div>`;
+  const filas = (n, anchos) => Array.from({ length: n }, (_, i) => `<div class="hb"><span class="n">${sk('70%')}</span><span class="t">${sk(anchos[i % anchos.length] + '%', '14px')}</span><span class="v">${sk('90px')}</span></div>`).join('');
+  $('#lsCostes').innerHTML = filas(8, [95, 18, 5, 8, 6, 3, 2, 30]);
+  $('#lsPeriodos').innerHTML = filas(6, [35, 33, 42, 38, 12, 95]);
+  $('#lsLecturas').innerHTML = filas(5, [95, 70, 60, 10, 6]);
+  $('#hCostes').textContent = ''; $('#notaLect').innerHTML = sk('90%');
+  $('#tbTop').innerHTML = `<thead><tr><th>CUPS · dirección</th><th class="num">kWh</th><th class="num">€ sin IVA</th><th class="num">€/kWh</th></tr></thead><tbody>` +
+    Array.from({ length: 8 }, () => `<tr class="skr"><td>${sk('170px')}<br>${sk('220px')}</td><td class="num">${sk('90px')}</td><td class="num">${sk('70px')}</td><td class="num">${sk('40px')}</td></tr>`).join('') + '</tbody>';
+}
+/** Filas de esqueleto en una tabla vacía; si ya tiene datos, solo la atenúa. */
+function skTabla(tb, cols = 8, n = 12) {
+  if (tb.querySelector('tbody tr:not(.skr)')) { tb.classList.add('loading'); return; }
+  const head = tb.querySelector('thead')?.outerHTML || `<thead><tr>${Array.from({ length: cols }, () => `<th>${sk('70px')}</th>`).join('')}</tr></thead>`;
+  const nc = tb.querySelectorAll('thead th').length || cols;
+  tb.innerHTML = head + '<tbody>' + Array.from({ length: n }, (_, r) => `<tr class="skr">${Array.from({ length: nc }, (_, c) => `<td>${sk(40 + ((r * 7 + c * 13) % 5) * 18 + 'px')}</td>`).join('')}</tr>`).join('') + '</tbody>';
+}
+
 /** Ejecuta una llamada y gestiona errores comunes (sesión caducada, red...). */
 async function seguro(fn) {
   try { return await fn(); }
@@ -50,7 +76,18 @@ function showTip(e, html) {
   if (y < 8) y = e.clientY + 16;
   tip.style.left = x + 'px'; tip.style.top = y + 'px';
 }
-const hideTip = () => tip.classList.add('hide');
+const hideTip = () => tip.classList.remove('ayuda') || tip.classList.add('hide');
+// iconos de ayuda: pasar el ratón, enfocar con teclado o tocar
+document.addEventListener('mouseover', (e) => { const b = e.target.closest('.info'); if (b) { showTip(e, esc(b.dataset.info)); tip.classList.add('ayuda'); } });
+document.addEventListener('mouseout', (e) => { if (e.target.closest('.info')) hideTip(); });
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.info');
+  if (!b) { if (tip.classList.contains('ayuda')) hideTip(); return; }
+  e.preventDefault(); e.stopPropagation();
+  const r = b.getBoundingClientRect(); showTip({ clientX: r.right, clientY: r.top }, esc(b.dataset.info)); tip.classList.add('ayuda');
+});
+document.addEventListener('focusin', (e) => { const b = e.target.closest?.('.info'); if (b) { const r = b.getBoundingClientRect(); showTip({ clientX: r.right, clientY: r.top }, esc(b.dataset.info)); tip.classList.add('ayuda'); } });
+document.addEventListener('focusout', (e) => { if (e.target.closest?.('.info')) hideTip(); });
 const tipRows = (title, rows) => `<b>${esc(title)}</b>` + rows.map(([k, v]) => `<div class="r"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join('');
 
 // ---------------------------------------------------------------- gráficos SVG
@@ -170,9 +207,10 @@ function hbars(el, rows, { fmtV, tipFn }) {
 // ---------------------------------------------------------------- INICIO
 let DASH = null;
 async function cargarDashboard() {
-  $('#dash').classList.add('loading');
+  skDashboard();
+  const pedido = JSON.stringify(args());
   const d = await seguro(() => SB.rpc('dashboard', args()));
-  $('#dash').classList.remove('loading');
+  if (pedido !== JSON.stringify(args())) return;      // el usuario cambió el filtro mientras cargaba
   if (!d) return;
   DASH = d;
   $('#vacio').classList.toggle('hide', !d.vacio);
@@ -195,9 +233,9 @@ function pintarDashboard() {
   $('#kTotal').textContent = `${fEur(k.total)} con IVA`;
   $('#kEurKwh').textContent = k.eur_kwh == null ? '—' : fN(k.eur_kwh, 3) + ' €';
   $('#kPuntos').textContent = fN(k.puntos);
-  $('#kFacturas').textContent = `con consumo · ${fN(k.puntos_total)} CUPS en total`;
+  $('#kFacturas').textContent = `con consumo · ${fN(k.puntos_total)} en total`;
   $('#kExceso').textContent = fEur(k.exceso_eur);
-  $('#kExcesoSub').textContent = `${fN(k.puntos_exceso)} puntos con penalización`;
+  $('#kExcesoSub').textContent = `${fN(k.puntos_exceso)} CUPS con penalización`;
 
   const baseTxt = d.base === 'consumo' ? 'por fecha fin del periodo facturado' : 'por fecha de emisión';
   $('#hMens').textContent = `kWh · ${baseTxt}`;
@@ -230,8 +268,8 @@ function pintarDashboard() {
     : 'No hay facturas con lectura estimada en este periodo.';
 
   const tmax = Math.max(...d.top.map((t) => t.kwh), 1);
-  $('#tbTop').innerHTML = `<thead><tr><th>Punto de recarga</th><th class="num">kWh</th><th class="num">€ sin IVA</th><th class="num">€/kWh</th></tr></thead><tbody>` +
-    d.top.map((t) => `<tr><td class="wrap">${esc(t.direccion)}<br><span class="cups">${esc(t.cups)}</span></td>
+  $('#tbTop').innerHTML = `<thead><tr><th>CUPS · dirección</th><th class="num">kWh</th><th class="num">€ sin IVA</th><th class="num">€/kWh</th></tr></thead><tbody>` +
+    d.top.map((t) => `<tr><td class="wrap"><span class="cups">${esc(t.cups)}</span><br>${esc(t.direccion)}</td>
       <td class="num"><span class="inbar" style="width:${(t.kwh / tmax) * 70}px"></span>${fN(t.kwh)}</td>
       <td class="num">${fEur(t.neto)}</td><td class="num">${fN(t.eur_kwh, 3)}</td></tr>`).join('') + '</tbody>';
 }
@@ -267,7 +305,7 @@ async function cargarFacturas() {
   const q = queryFacturas();
   q.select = todas ? COLS_F.map((c) => c[0]).join(',') + ',cabecera_id,valores' : COLS_F.map((c) => c[0]).join(',');
   q.limit = 50; q.offset = (ST.f.pag - 1) * 50;
-  const tb = $('#tbFact'); tb.classList.add('loading');
+  const tb = $('#tbFact'); skTabla(tb, 12);
   q.select += ',negativa,excluida';
   const r = await seguro(() => SB.select('facturas_calc', q, { count: true }));
   tb.classList.remove('loading');
@@ -351,7 +389,7 @@ async function exportarFilas(q, nombre, boton) {
 
 // ---------------------------------------------------------------- PUNTOS
 const P_COLS = [
-  ['direccion', 'Punto de recarga'], ['cups', 'CUPS'], ['distribuidora', 'Distribuidora'], ['tarifa', 'Tarifa'],
+  ['cups', 'CUPS'], ['direccion', 'Dirección'], ['distribuidora', 'Distribuidora'], ['tarifa', 'Tarifa'],
   ['facturas', 'Facturas', 'n'], ['kwh', 'Consumo kWh', 'n'], ['neto', '€ sin IVA', 'e'], ['total', '€ con IVA', 'e'],
   ['eur_kwh', '€/kWh', 'r'], ['exceso_eur', 'Exceso potencia €', 'e'], ['desde', 'Desde', 'f'], ['hasta', 'Hasta', 'f'],
 ];
@@ -372,7 +410,7 @@ function puntosFiltrados(todos) {
   return r;
 }
 async function cargarPuntos() {
-  const tb = $('#tbPuntos'); tb.classList.add('loading');
+  const tb = $('#tbPuntos'); skTabla(tb, 12);
   const todos = await seguro(datosPuntos);
   tb.classList.remove('loading');
   if (!todos) return;
@@ -394,13 +432,13 @@ async function cargarPuntos() {
   tb.querySelectorAll('th').forEach((th) => th.onclick = () => {
     const c = th.dataset.c; ST.p.dir = ST.p.orden === c && ST.p.dir === 'desc' ? 'asc' : 'desc'; ST.p.orden = c; cargarPuntos();
   });
-  $('#pTotal').textContent = filas.length > vis.length ? `${fN(filas.length)} puntos (se muestran ${vis.length}; exporta para verlos todos)` : `${fN(filas.length)} puntos`;
+  $('#pTotal').textContent = filas.length > vis.length ? `${fN(filas.length)} CUPS (se muestran ${vis.length}; exporta para verlos todos)` : `${fN(filas.length)} CUPS`;
 }
 async function exportarPuntos() {
   const todos = await seguro(datosPuntos); if (!todos) return;
   const aoa = [P_COLS.map((c) => c[1])].concat(puntosFiltrados(todos).map((f) => P_COLS.map(([k, , n]) =>
     n === 'f' ? (f[k] ? isoASerial(f[k]) : null) : (n ? (f[k] == null ? null : +f[k]) : f[k]))));
-  descargar(hoja(aoa, P_COLS.map((c, i) => (c[2] === 'f' ? i : -1)).filter((i) => i >= 0)), 'Puntos', `puntos_recarga_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  descargar(hoja(aoa, P_COLS.map((c, i) => (c[2] === 'f' ? i : -1)).filter((i) => i >= 0)), 'CUPS', `cups_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 // ---------------------------------------------------------------- CORRECCIONES
@@ -408,11 +446,13 @@ const CAMPOS = { estado: 'Estado de la factura', id_factura: 'ID factura', cups:
   distribuidora: 'Distribuidora', tarifa: 'Tarifa', sheet_code: 'Pestaña', archivo_origen: 'Archivo de origen' };
 const ACCIONES = { negativo: 'Poner en negativo', excluir: 'Excluir de los cálculos' };
 async function cargarCorrecciones() {
+  skTabla($('#tbReglas'), 9, 2);
   const reglas = await seguro(() => SB.rpc('correcciones_resumen'));
   if (!reglas) return;
   const adm = ST.admin;
   $('#cardNuevaRegla').classList.toggle('hide', !adm);
   $('#reglasRO').textContent = adm ? '' : 'Solo un administrador puede añadir o cambiar correcciones.';
+  $('#tbReglas').classList.remove('loading');
   $('#tbReglas').innerHTML = `<thead><tr><th>Activa</th><th>Cuando</th><th>Es igual a</th><th>Entonces</th><th>Nota</th><th class="num">Filas afectadas</th><th class="num">Facturas</th><th>Creada</th><th></th></tr></thead><tbody>` +
     (reglas.length ? reglas.map((r) => `<tr>
       <td><label class="sw"><input type="checkbox" data-id="${r.id}" class="rAct" ${r.activa ? 'checked' : ''} ${adm ? '' : 'disabled'}><span></span></label></td>
@@ -465,6 +505,8 @@ function pintarCola() {
   $('#btnProcesar').disabled = !COLA.length;
 }
 async function cargarCargas() {
+  skTabla($('#tbCargas'), 7, 4);
+  for (const id of ['#dFilas', '#dFact', '#dUlt']) if ($(id).textContent === '—') $(id).innerHTML = sk('70px');
   const [res, h] = await Promise.all([
     seguro(() => SB.rpc('resumen')),
     seguro(() => SB.select('cargas', { select: '*', order: 'fecha.desc', limit: 100 })),
@@ -474,6 +516,7 @@ async function cargarCargas() {
   $('#dFilas').textContent = fN(res.filas); $('#dFact').textContent = fN(res.facturas); $('#dUlt').textContent = fFechaHora(res.ultima_carga);
   $('#btnVaciar').classList.toggle('hide', !ST.admin);
   $('#dAdmin').textContent = ST.admin ? 'Eres administrador: puedes vaciar los datos.' : '';
+  $('#tbCargas').classList.remove('loading');
   $('#tbCargas').innerHTML = `<thead><tr><th>Fecha</th><th>Usuario</th><th>Ficheros</th><th class="num">Leídas</th><th class="num">Duplicadas en la carga</th><th class="num">Ya existentes</th><th class="num">Nuevas</th></tr></thead><tbody>` +
     (h.length ? h.map((c) => `<tr><td>${fFechaHora(c.fecha)}</td><td>${esc(c.usuario_email || '')}</td><td class="files" title="${esc(c.archivos.join('\n'))}">${c.archivos.length} · ${esc(c.archivos[0] || '')}${c.archivos.length > 1 ? '…' : ''}</td>
       <td class="num">${fN(c.leidas)}</td><td class="num">${fN(c.duplicadas_en_carga)}</td><td class="num">${fN(c.ya_existentes)}</td><td class="num"><b>${fN(c.nuevas)}</b></td></tr>`).join('')
@@ -562,36 +605,44 @@ async function procesar() {
 
 // ---------------------------------------------------------------- navegación y filtros
 const TITULOS = {
-  inicio: ['Inicio', 'Resumen de consumo y coste de los puntos de recarga'],
+  inicio: ['Inicio', 'Resumen de consumo y coste de la red de recarga'],
   facturas: ['Facturas', 'Todas las líneas de factura unificadas, sin duplicados'],
-  puntos: ['Puntos de recarga', 'Consumo y coste agregados por CUPS'],
+  cups: ['CUPS', 'Consumo y coste agregados por CUPS (un CUPS puede agrupar varios puntos de recarga)'],
   cruce: ['Cruce con sistema técnico', 'Facturado vs. medido'],
   correcciones: ['Correcciones', 'Reglas para corregir cómo cuentan algunas facturas'],
   cargar: ['Cargar datos', 'Sube Excels, carpetas o ZIPs de facturación agrupada'],
 };
-function irA(v) {
+function irA(v) { mostrarVista(v); refrescar(); }
+function mostrarVista(v) {
+  if (v === 'puntos') v = 'cups';
   if (!TITULOS[v]) v = 'inicio';
   ST.vista = v;
   $$('nav a').forEach((a) => a.classList.toggle('on', a.dataset.v === v));
   $$('.vista').forEach((s) => s.classList.toggle('hide', s.id !== 'v-' + v));
   $('#titulo').textContent = TITULOS[v][0]; $('#subtitulo').textContent = TITULOS[v][1];
-  $('#filtros').classList.toggle('hide', !['inicio', 'facturas', 'puntos'].includes(v));
-  refrescar();
+  $('#filtros').classList.toggle('hide', !['inicio', 'facturas', 'cups'].includes(v));
+  if (v === 'inicio') skDashboard();
 }
 function refrescar() {
   if (ST.vista === 'inicio') cargarDashboard();
   else if (ST.vista === 'facturas') cargarFacturas();
-  else if (ST.vista === 'puntos') cargarPuntos();
+  else if (ST.vista === 'cups') cargarPuntos();
   else if (ST.vista === 'cargar') cargarCargas();
   else if (ST.vista === 'correcciones') cargarCorrecciones();
 }
 async function refrescarAnios() {
   const [anios, res] = await Promise.all([seguro(() => SB.rpc('anios', { p_base: ST.base })), seguro(() => SB.rpc('resumen'))]);
-  if (!anios || !res) return false;
+  if (!anios || !res) {
+    // sin respuesta: se usa el año en curso para no bloquear la carga y se reintenta en segundo plano
+    if (ST.anio == null && !ST.todo) ST.anio = new Date().getFullYear();
+    if (!$('#selAnio').options.length) { $('#selAnio').innerHTML = `<option value="${ST.anio ?? ''}">${ST.anio ?? 'Todo el histórico'}</option>`; }
+    clearTimeout(refrescarAnios._t); refrescarAnios._t = setTimeout(refrescarAnios, 4000);
+    return false;
+  }
   ST.admin = !!res.admin;
   const sel = $('#selAnio'), prev = ST.anio;
   sel.innerHTML = anios.map((a) => `<option value="${a}">${a}</option>`).join('') + '<option value="">Todo el histórico</option>';
-  ST.anio = anios.includes(prev) ? prev : (anios[0] ?? null);
+  ST.anio = (prev === null && ST.todo) ? null : anios.includes(prev) ? prev : (anios[0] ?? null);
   sel.value = ST.anio ?? '';
   $('#sideFoot').innerHTML = res.filas ? `${fN(res.facturas)} facturas guardadas<br>Última carga: ${esc(fFechaHora(res.ultima_carga))}` : 'Sin datos cargados';
   return true;
@@ -614,7 +665,15 @@ function mostrarLogin(modo = 'login') {
 async function entrarApp() {
   $('#login').classList.add('hide'); $('#appRoot').classList.remove('hide');
   $('#meEmail').textContent = SB.email || '';
-  if (await refrescarAnios()) irA(location.hash.slice(1) || 'inicio');
+  mostrarVista(location.hash.slice(1) || 'inicio');   // se ve al instante, con esqueletos
+  await refrescarAnios();                              // años disponibles (si falla, se sigue igual)
+  refrescar();
+}
+// filtros recordados en este navegador
+function guardarFiltros() { try { localStorage.setItem('emob.filtros', JSON.stringify({ base: ST.base, anio: ST.anio })); } catch { /* sin almacenamiento */ } }
+function leerFiltros() {
+  try { const f = JSON.parse(localStorage.getItem('emob.filtros') || 'null'); if (f) { ST.base = f.base === 'emision' ? 'emision' : 'consumo'; ST.anio = f.anio ?? null; ST.todo = f.anio === null; } } catch { /* nada */ }
+  $$('#segBase button').forEach((x) => x.classList.toggle('on', x.dataset.b === ST.base));
 }
 
 function init() {
@@ -656,9 +715,9 @@ function init() {
   // filtros
   $$('#segBase button').forEach((b) => b.onclick = async () => {
     $$('#segBase button').forEach((x) => x.classList.toggle('on', x === b));
-    ST.base = b.dataset.b; ST.f.pag = 1; await refrescarAnios(); refrescar();
+    ST.base = b.dataset.b; ST.f.pag = 1; if (ST.vista === 'inicio') skDashboard(); await refrescarAnios(); guardarFiltros(); refrescar();
   });
-  $('#selAnio').onchange = (e) => { ST.anio = e.target.value ? +e.target.value : null; ST.f.pag = 1; refrescar(); };
+  $('#selAnio').onchange = (e) => { ST.anio = e.target.value ? +e.target.value : null; ST.todo = !e.target.value; ST.f.pag = 1; guardarFiltros(); refrescar(); };
   let t; const deb = (fn) => () => { clearTimeout(t); t = setTimeout(fn, 300); };
   $('#fQ').oninput = deb(() => { ST.f.pag = 1; cargarFacturas(); });
   $('#fEstado').onchange = $('#fTodas').onchange = () => { ST.f.pag = 1; cargarFacturas(); };
@@ -698,6 +757,7 @@ function init() {
   let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (ST.vista === 'inicio' && DASH && !DASH.vacio) pintarDashboard(); }, 150); });
   addEventListener('hashchange', () => { if (!$('#appRoot').classList.contains('hide')) irA(location.hash.slice(1)); });
 
+  leerFiltros();
   // arranque: ¿venimos de un enlace de invitación / recuperación?
   const tipo = SB.leerSesionDeUrl();
   if (tipo === 'invite' || tipo === 'recovery') {
