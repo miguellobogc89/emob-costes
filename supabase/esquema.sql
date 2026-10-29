@@ -252,11 +252,13 @@ begin
   ),
   lote as (select huella from public.facturas where doc_agrupada is null limit greatest(p_lote, 1))
   update public.facturas f set
-    doc_agrupada   = coalesce(public._entero_txt(nullif(trim(f.valores ->> c.p_doc), '')),
-                              nullif(trim(f.valores ->> c.p_fis), ''), '-'),
-    fecha_agrupada = case when f.valores ->> c.p_fec ~ '^\d{4}-\d{2}-\d{2}' then left(f.valores ->> c.p_fec, 10)::date end,
-    ajuste_de      = public._entero_txt(nullif(trim(f.valores ->> c.p_aju), ''))
+    doc_agrupada   = coalesce(public._entero_txt(nullif(trim(v.val ->> c.p_doc), '')),
+                              nullif(trim(v.val ->> c.p_fis), ''), '-'),
+    fecha_agrupada = case when v.val ->> c.p_fec ~ '^\d{4}-\d{2}-\d{2}' then left(v.val ->> c.p_fec, 10)::date end,
+    ajuste_de      = public._entero_txt(nullif(trim(v.val ->> c.p_aju), ''))
   from c, lote
+  cross join lateral (select coalesce(f2.valores, fv.valores) val from public.facturas f2
+                      left join public.facturas_valores fv on fv.huella = f2.huella where f2.huella = lote.huella) v
   where c.id = f.cabecera_id and f.huella = lote.huella;
   select count(*) into v_quedan from public.facturas where doc_agrupada is null;
   return v_quedan;
@@ -386,6 +388,55 @@ $$;
 grant execute on function public.recalcular_sustituidas(), public.sustituidas_resumen(), public.rellenar_pendientes(int) to authenticated;
 revoke execute on function public.recalcular_sustituidas(), public.sustituidas_resumen(), public.rellenar_pendientes(int) from anon, public;
 
+
+-- ---------------------------------------------------------------- fila original aparte
+-- La fila original completa (≈3 KB) va en su propia tabla: así la tabla de facturas es
+-- estrecha, se lee rápido y las marcas (sustituida, anómala…) no reescriben esos 3 KB.
+create table if not exists public.facturas_valores (
+  huella  text primary key,
+  valores jsonb not null
+);
+alter table public.facturas alter column valores drop not null;
+create index if not exists facturas_por_mover_idx on public.facturas (huella) where valores is not null;
+alter table public.facturas_valores enable row level security;
+drop policy if exists fv_leer on public.facturas_valores;
+drop policy if exists fv_ins  on public.facturas_valores;
+create policy fv_leer on public.facturas_valores for select to authenticated using (true);
+create policy fv_ins  on public.facturas_valores for insert to authenticated with check (true);
+revoke all on public.facturas_valores from anon;
+grant select, insert on public.facturas_valores to authenticated;
+
+-- al insertar una factura, su fila original se guarda aparte (se ejecuta el último: «zz»)
+create or replace function public.tg_facturas_valores()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.valores is not null then
+    insert into public.facturas_valores (huella, valores) values (new.huella, new.valores)
+    on conflict (huella) do nothing;
+    new.valores := null;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists zz_facturas_valores on public.facturas;
+create trigger zz_facturas_valores before insert on public.facturas
+  for each row execute function public.tg_facturas_valores();
+
+-- traslado de las filas ya guardadas, por tandas (la web lo llama hasta que devuelve 0)
+create or replace function public.mover_valores(p_lote int default 3000)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_quedan int;
+begin
+  with l as (select huella, valores from public.facturas where valores is not null limit greatest(p_lote, 1)),
+  ins as (insert into public.facturas_valores (huella, valores) select huella, valores from l on conflict (huella) do nothing)
+  update public.facturas f set valores = null from l where f.huella = l.huella;
+  select count(*) into v_quedan from public.facturas where valores is not null;
+  return v_quedan;
+end;
+$$;
+grant execute on function public.mover_valores(int) to authenticated;
+revoke execute on function public.mover_valores(int) from anon, public;
+
 -- Tensión según la tarifa de acceso: 6.x = media tensión (MT); el resto, baja tensión (BT)
 create or replace function public._tension(tarifa text)
 returns text language sql immutable as $$
@@ -396,7 +447,7 @@ $$;
 create or replace view public.facturas_calc with (security_invoker = true) as
 select f.huella, f.carga_id, f.cabecera_id, f.sheet_code, f.archivo_origen, f.id_factura, f.estado, f.cups,
        f.direccion, f.distribuidora, f.tarifa, f.tipo_lectura, f.fecha_emision, f.fecha_desde, f.fecha_hasta,
-       f.mes_emision, f.valores, f.creado,
+       f.mes_emision, coalesce(f.valores, fv.valores) valores, f.creado,
        c.negativa, c.excluida,
        case when an.anomala then null else public._neg(f.kwh, c.negativa) end kwh,
        case when an.anomala then null else public._neg(f.kwh_p1, c.negativa) end kwh_p1,
@@ -414,6 +465,7 @@ select f.huella, f.carga_id, f.cabecera_id, f.sheet_code, f.archivo_origen, f.id
        f.sustituida, f.motivo_sust,
        an.anomala
 from public.facturas f
+left join public.facturas_valores fv on fv.huella = f.huella
 cross join lateral (select f.negativa, f.excluida) c
 cross join lateral (
   select coalesce((select o.activa from public.opciones o where o.clave = 'consumos_anomalos'), true)
@@ -503,35 +555,66 @@ create or replace function public.refrescar_cache()
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare t0 timestamptz := clock_timestamp();
 begin
+  -- Una sola lectura de las facturas (con correcciones) a una tabla temporal estrecha.
+  -- Importes en coma flotante (sumar es mucho más rápido; se redondea a 4 decimales) y una marca
+  -- «primera fila de cada factura» para contar facturas sin COUNT(DISTINCT), que obliga a ordenar.
+  drop table if exists pg_temp._cache_src;
+  create temp table _cache_src on commit drop as
+  select f.fecha_hasta, f.fecha_emision, f.tension, f.estado, f.tipo_lectura, f.cups, f.fecha_desde,
+         (f.id_factura is not null and row_number() over (partition by f.id_factura order by f.huella) = 1) primera,
+         f.kwh::float8 kwh, f.kwh_p1::float8 kwh_p1, f.kwh_p2::float8 kwh_p2, f.kwh_p3::float8 kwh_p3,
+         f.kwh_p4::float8 kwh_p4, f.kwh_p5::float8 kwh_p5, f.kwh_p6::float8 kwh_p6,
+         f.imp_neto::float8 imp_neto, f.imp_total::float8 imp_total, f.imp_energia::float8 imp_energia,
+         f.imp_potencia::float8 imp_potencia, f.imp_exceso::float8 imp_exceso, f.imp_alquiler::float8 imp_alquiler,
+         f.imp_ie::float8 imp_ie, f.imp_otros::float8 imp_otros, f.imp_iva::float8 imp_iva
+  from public.facturas_ok f;
+
+  -- última dirección / distribuidora / tarifa conocida de cada CUPS
+  drop table if exists pg_temp._cache_dir;
+  create temp table _cache_dir on commit drop as
+  select distinct on (cups) cups, direccion, distribuidora, tarifa
+  from public.facturas_ok where cups is not null
+  order by cups, fecha_hasta desc nulls last;
+
   delete from public.cache_mes where true;
   delete from public.cache_cups where true;
   insert into public.cache_mes
   select b.base, extract(year from x.fecha)::int, extract(month from x.fecha)::int, f.tension, f.estado, f.tipo_lectura,
-         sum(f.kwh), sum(f.kwh_p1), sum(f.kwh_p2), sum(f.kwh_p3), sum(f.kwh_p4), sum(f.kwh_p5), sum(f.kwh_p6),
-         sum(f.imp_neto), sum(f.imp_total), sum(f.imp_energia), sum(f.imp_potencia), sum(f.imp_exceso), sum(f.imp_alquiler),
-         sum(f.imp_ie), sum(f.imp_otros), sum(f.imp_iva), count(distinct f.id_factura), count(*)
-  from public.facturas_ok f
+         round(sum(f.kwh)::numeric, 4), round(sum(f.kwh_p1)::numeric, 4), round(sum(f.kwh_p2)::numeric, 4),
+         round(sum(f.kwh_p3)::numeric, 4), round(sum(f.kwh_p4)::numeric, 4), round(sum(f.kwh_p5)::numeric, 4),
+         round(sum(f.kwh_p6)::numeric, 4), round(sum(f.imp_neto)::numeric, 4), round(sum(f.imp_total)::numeric, 4),
+         round(sum(f.imp_energia)::numeric, 4), round(sum(f.imp_potencia)::numeric, 4), round(sum(f.imp_exceso)::numeric, 4),
+         round(sum(f.imp_alquiler)::numeric, 4), round(sum(f.imp_ie)::numeric, 4), round(sum(f.imp_otros)::numeric, 4),
+         round(sum(f.imp_iva)::numeric, 4), count(*) filter (where f.primera), count(*)
+  from pg_temp._cache_src f
   cross join (values ('consumo'), ('emision')) b(base)
   cross join lateral (select case when b.base = 'emision' then f.fecha_emision else f.fecha_hasta end fecha) x
   group by 1, 2, 3, 4, 5, 6;
   insert into public.cache_cups
-  select b.base, extract(year from x.fecha)::int, f.tension, f.cups,
-         (array_agg(f.direccion     order by f.fecha_hasta desc nulls last))[1],
-         (array_agg(f.distribuidora order by f.fecha_hasta desc nulls last))[1],
-         (array_agg(f.tarifa        order by f.fecha_hasta desc nulls last))[1],
-         max(f.fecha_hasta), count(distinct f.id_factura),
-         coalesce(sum(f.kwh), 0), coalesce(sum(f.imp_neto), 0), coalesce(sum(f.imp_total), 0), coalesce(sum(f.imp_exceso), 0),
-         min(f.fecha_desde), max(f.fecha_hasta)
-  from public.facturas_ok f
-  cross join (values ('consumo'), ('emision')) b(base)
-  cross join lateral (select case when b.base = 'emision' then f.fecha_emision else f.fecha_hasta end fecha) x
-  group by 1, 2, 3, 4;
+  select g.base, g.anio, g.tension, g.cups, d.direccion, d.distribuidora, d.tarifa, g.hasta,
+         g.facturas, g.kwh, g.neto, g.total, g.exceso, g.desde, g.hasta
+  from (
+    select b.base, extract(year from x.fecha)::int anio, f.tension, f.cups,
+           count(*) filter (where f.primera) facturas,
+           coalesce(round(sum(f.kwh)::numeric, 4), 0) kwh, coalesce(round(sum(f.imp_neto)::numeric, 4), 0) neto,
+           coalesce(round(sum(f.imp_total)::numeric, 4), 0) total, coalesce(round(sum(f.imp_exceso)::numeric, 4), 0) exceso,
+           min(f.fecha_desde) desde, max(f.fecha_hasta) hasta
+    from pg_temp._cache_src f
+    cross join (values ('consumo'), ('emision')) b(base)
+    cross join lateral (select case when b.base = 'emision' then f.fecha_emision else f.fecha_hasta end fecha) x
+    group by 1, 2, 3, 4
+  ) g
+  left join pg_temp._cache_dir d on d.cups = g.cups;
   insert into public.cache_info (id, actualizado, filas, facturas, excluidas, negativas, sustituidas)
-  select 1, now(), count(*), count(distinct id_factura), count(*) filter (where excluida),
+  select 1, now(), count(*), count(*) filter (where primera_id), count(*) filter (where excluida),
          count(*) filter (where negativa), count(*) filter (where sustituida)
-  from public.facturas
+  from (select excluida, negativa, sustituida,
+               id_factura is not null and row_number() over (partition by id_factura order by huella) = 1 primera_id
+        from public.facturas) t
   on conflict (id) do update set actualizado = excluded.actualizado, filas = excluded.filas, facturas = excluded.facturas,
     excluidas = excluded.excluidas, negativas = excluded.negativas, sustituidas = excluded.sustituidas;
+  drop table if exists pg_temp._cache_src;
+  drop table if exists pg_temp._cache_dir;
   return jsonb_build_object('ms', round(extract(epoch from clock_timestamp() - t0) * 1000));
 end;
 $$;
@@ -552,6 +635,7 @@ returns jsonb language sql stable as $$
     'facturas',     coalesce(i.facturas, 0),
     'cache',        i.actualizado,
     'pendientes',   (select count(*) from public.facturas where doc_agrupada is null),
+    'por_mover',    (select count(*) from public.facturas where valores is not null),
     'ultima_carga', (select max(fecha) from public.cargas),
     'admin',        public.es_admin()
   )
@@ -682,6 +766,7 @@ begin
     raise exception 'Solo un administrador puede vaciar los datos';
   end if;
   delete from public.facturas where true;
+  delete from public.facturas_valores where true;
   delete from public.cargas where true;
   delete from public.cabeceras where true;
   -- las reglas de corrección se conservan

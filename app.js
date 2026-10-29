@@ -900,7 +900,7 @@ async function refrescarAnios() {
   }
   ST.admin = !!res.admin;
   LS.set(claveA, anios);
-  if (res.pendientes > 0) prepararPendientes(res.pendientes);
+  if (res.pendientes > 0 || res.por_mover > 0) prepararPendientes(res.pendientes, res.por_mover || 0);
   const sel = $('#selAnio'), prev = ST.anio;
   sel.innerHTML = anios.map((a) => `<option value="${a}">${a}</option>`).join('') + '<option value="">Todo el histórico</option>';
   ST.anio = (prev === null && ST.todo) ? null : anios.includes(prev) ? prev : (anios[0] ?? null);
@@ -911,19 +911,23 @@ async function refrescarAnios() {
 
 // Facturas guardadas antes de la detección de refacturaciones: se preparan por tandas
 let PREPARANDO = false;
-async function prepararPendientes(total) {
+async function prepararPendientes(total, porMover = 0) {
   if (PREPARANDO) return; PREPARANDO = true;
   const aviso = $('#aviso'); aviso.classList.remove('hide');
-  const pinta = (q) => { $('#avisoTxt').textContent = `Revisando las facturas guardadas para detectar refacturaciones y copias… ${fN(total - q)} de ${fN(total)}`; $('#avisoBar').style.width = ((total - q) / total * 100) + '%'; };
+  const pinta = (txt, hecho, de) => { $('#avisoTxt').textContent = `${txt}… ${fN(hecho)} de ${fN(de)}`; $('#avisoBar').style.width = (de ? hecho / de * 100 : 100) + '%'; };
   try {
-    let quedan = total; pinta(quedan);
-    while (quedan > 0) { quedan = await SB.rpc('rellenar_pendientes', { p_lote: 8000 }); pinta(quedan); }
-    $('#avisoTxt').textContent = 'Aplicando las reglas de facturas sustituidas…';
+    // 1) reorganizar el almacenamiento: la fila original completa pasa a su propia tabla
+    let q = porMover;
+    while (q > 0) { pinta('Optimizando el almacenamiento de las facturas guardadas', porMover - q, porMover); q = await SB.rpc('mover_valores', { p_lote: 3000 }); }
+    // 2) preparar los datos para detectar refacturaciones y copias
+    q = total;
+    while (q > 0) { pinta('Revisando las facturas guardadas para detectar refacturaciones y copias', total - q, total); q = await SB.rpc('rellenar_pendientes', { p_lote: 8000 }); }
+    $('#avisoTxt').textContent = 'Aplicando las reglas y actualizando los resúmenes…';
     const r = await SB.rpc('recalcular_sustituidas');
     toast(`Revisión terminada: ${fN(r.sustituidas)} filas sustituidas ya no se cuentan dos veces.`, 7000);
     datosCambiados(); refrescar();
   } catch (e) {
-    if (e.message === 'sin_sesion') mostrarLogin(); else toast('No se pudo terminar la revisión: ' + e.message + '. Se reintentará al pulsar «Actualizar».', 8000);
+    if (e.message === 'sin_sesion') mostrarLogin(); else toast('No se pudo terminar: ' + e.message + '. Se reintentará al pulsar «Actualizar».', 8000);
   } finally { PREPARANDO = false; aviso.classList.add('hide'); }
 }
 
@@ -990,7 +994,9 @@ function init() {
   $('#rCampo').onchange = sugerirValores;
   $('#btnActualizar').onclick = async (e) => {
     const b = e.currentTarget; b.classList.add('girando'); b.disabled = true;
-    await seguro(() => SB.rpc('refrescar_cache'));
+    const res = await seguro(() => SB.rpc('resumen'));
+    if (res && (res.pendientes > 0 || res.por_mover > 0)) prepararPendientes(res.pendientes, res.por_mover || 0);
+    else await seguro(() => SB.rpc('refrescar_cache'));
     datosCambiados(); CABS = null;
     await refrescarAnios(); await Promise.resolve(refrescar());
     setTimeout(() => { b.classList.remove('girando'); b.disabled = false; }, 400);
