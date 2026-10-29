@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>eMob · Costes de energía</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%232a78d6'/%3E%3Cpath d='M13 4 7 13h4l-1 7 6-9h-4z' fill='white'/%3E%3C/svg%3E">
+</head>
+<body>
+<!-- ============ Acceso ============ -->
+<div id="login" class="login hide">
+  <form class="card" id="fLogin" autocomplete="on">
+    <div class="brand dark">
+      <span class="logo"><svg viewBox="0 0 24 24"><path d="M13 3 6 13h5l-1 8 7-10h-5z"/></svg></span>
+      <div><b>eMob</b><small>Costes de energía</small></div>
+    </div>
+    <h2 id="lTitulo">Iniciar sesión</h2>
+    <label id="lEmailBox">Email<input type="email" id="lEmail" autocomplete="username" required></label>
+    <label>Contraseña<input type="password" id="lPass" autocomplete="current-password" required minlength="6"></label>
+    <label id="lPass2Box" class="hide">Repite la contraseña<input type="password" id="lPass2" autocomplete="new-password" minlength="6"></label>
+    <p class="err" id="lErr"></p>
+    <button class="btn pri" id="lBtn" type="submit">Entrar</button>
+    <a href="#" class="link sm" id="lOlvido">¿Has olvidado la contraseña?</a>
+  </form>
+</div>
+
+<div class="app hide" id="appRoot">
+
+  <!-- ============ Sidebar ============ -->
+  <aside class="side">
+    <div class="brand">
+      <span class="logo"><svg viewBox="0 0 24 24"><path d="M13 3 6 13h5l-1 8 7-10h-5z"/></svg></span>
+      <div><b>eMob</b><small>Costes de energía</small></div>
+    </div>
+    <nav>
+      <a href="#inicio" data-v="inicio"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg>Inicio</a>
+      <a href="#facturas" data-v="facturas"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>Facturas</a>
+      <a href="#puntos" data-v="puntos"><svg viewBox="0 0 24 24"><path d="M7 21V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v16M5 21h13M16 9h2a1 1 0 0 1 1 1v6a1.5 1.5 0 0 0 3 0V8l-2-2M12 7l-2 4h3l-2 4"/></svg>Puntos de recarga</a>
+      <a href="#cruce" data-v="cruce"><svg viewBox="0 0 24 24"><path d="M4 7h11l-3-3M20 17H9l3 3"/></svg>Cruce sistema técnico<span class="pill">Pronto</span></a>
+      <div class="sep"></div>
+      <a href="#correcciones" data-v="correcciones"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></svg>Correcciones</a>
+      <a href="#cargar" data-v="cargar"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg>Cargar datos</a>
+    </nav>
+    <div class="side-foot">
+      <div id="sideFoot">—</div>
+      <div class="me"><span id="meEmail"></span><button class="btn-link" id="btnSalir">Cerrar sesión</button></div>
+    </div>
+  </aside>
+
+  <!-- ============ Main ============ -->
+  <main class="main">
+    <header class="top">
+      <div>
+        <h1 id="titulo">Inicio</h1>
+        <p id="subtitulo" class="muted"></p>
+      </div>
+      <div class="acciones-top">
+      <button class="btn" id="btnActualizar" title="Volver a leer los datos y aplicar las correcciones"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>Actualizar</button>
+      <div class="filtros" id="filtros">
+        <div class="seg" id="segBase" role="group" aria-label="Base temporal">
+          <button data-b="consumo" class="on" title="Agrupa por la fecha fin del periodo facturado">Mes de consumo</button>
+          <button data-b="emision" title="Agrupa por la fecha de emisión de la factura">Mes de emisión</button>
+        </div>
+        <select id="selAnio" aria-label="Año"></select>
+      </div>
+      </div>
+    </header>
+
+    <!-- ---------- INICIO ---------- -->
+    <section class="vista" id="v-inicio">
+      <div id="vacio" class="empty hide">
+        <h2>Todavía no hay facturas cargadas</h2>
+        <p>Sube los Excels de facturación agrupada de Endesa para ver el dashboard.</p>
+        <a class="btn pri" href="#cargar">Cargar datos</a>
+      </div>
+      <div id="dash">
+        <div class="kpis">
+          <div class="card hero">
+            <span class="lbl" id="kHeroLbl">Consumo</span>
+            <div class="hero-val"><span id="kKwh">—</span><small>MWh</small></div>
+            <span class="delta" id="kDelta"></span>
+            <span class="muted sm" id="kHeroSub"></span>
+          </div>
+          <div class="card tile"><span class="lbl">Importe sin IVA</span><b id="kNeto">—</b><span class="muted sm" id="kTotal"></span></div>
+          <div class="card tile"><span class="lbl">Coste medio</span><b id="kEurKwh">—</b><span class="muted sm">€/kWh sin IVA</span></div>
+          <div class="card tile"><span class="lbl">Puntos de recarga facturados</span><b id="kPuntos">—</b><span class="muted sm" id="kFacturas"></span></div>
+          <div class="card tile"><span class="lbl">Exceso de potencia</span><b id="kExceso">—</b><span class="muted sm" id="kExcesoSub"></span></div>
+        </div>
+
+        <div class="grid g2-1">
+          <div class="card">
+            <div class="card-h"><h3>Consumo mensual</h3><span class="muted sm" id="hMens">kWh</span></div>
+            <div class="chart" id="chMensual"></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Coste medio por mes</h3><span class="muted sm">€/kWh sin IVA</span></div>
+            <div class="chart" id="chEurKwh"></div>
+          </div>
+        </div>
+
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-h"><h3>Desglose del coste</h3><span class="muted sm" id="hCostes"></span></div>
+            <div id="lsCostes" class="hbars"></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Consumo por periodo tarifario</h3><span class="muted sm">kWh · P1 punta … P6 valle</span></div>
+            <div id="lsPeriodos" class="hbars"></div>
+          </div>
+        </div>
+
+        <div class="grid g2-1">
+          <div class="card">
+            <div class="card-h"><h3>Puntos con más consumo</h3><a href="#puntos" class="link sm">Ver todos →</a></div>
+            <div class="tbl-wrap"><table class="tbl" id="tbTop"></table></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Tipo de lectura</h3><span class="muted sm">nº facturas</span></div>
+            <div id="lsLecturas" class="hbars"></div>
+            <p class="note" id="notaLect"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- FACTURAS ---------- -->
+    <section class="vista hide" id="v-facturas">
+      <div class="card">
+        <div class="toolbar">
+          <input type="search" id="fQ" placeholder="Buscar CUPS, dirección, ID factura, pestaña…">
+          <select id="fEstado">
+            <option value="">Todos los estados</option>
+            <option value="N">Normal</option><option value="A">Anuladora (A)</option><option value="C">Anulada (C)</option><option value="R">Rectificativa</option>
+          </select>
+          <label class="chk"><input type="checkbox" id="fTodas"> Todas las columnas</label>
+          <span class="grow"></span>
+          <span class="muted sm" id="fTotal"></span>
+          <button class="btn" id="fExport">Exportar Excel</button>
+        </div>
+        <div class="tbl-wrap big"><table class="tbl" id="tbFact"></table></div>
+        <div class="pager" id="fPager"></div>
+      </div>
+    </section>
+
+    <!-- ---------- PUNTOS ---------- -->
+    <section class="vista hide" id="v-puntos">
+      <div class="card">
+        <div class="toolbar">
+          <input type="search" id="pQ" placeholder="Buscar CUPS, dirección o distribuidora…">
+          <span class="grow"></span>
+          <span class="muted sm" id="pTotal"></span>
+          <button class="btn" id="pExport">Exportar Excel</button>
+        </div>
+        <div class="tbl-wrap big"><table class="tbl" id="tbPuntos"></table></div>
+      </div>
+    </section>
+
+    <!-- ---------- CRUCE ---------- -->
+    <section class="vista hide" id="v-cruce">
+      <div class="card soon">
+        <span class="pill big">Próximamente</span>
+        <h2>Cruce con los consumos del sistema técnico</h2>
+        <p class="muted">Aquí se importarán las lecturas de los puntos de recarga y se compararán con lo facturado por Endesa.</p>
+        <div class="steps">
+          <div><b>1 · Importar</b><span>Fichero del sistema técnico con punto / CUPS, fecha y kWh entregados.</span></div>
+          <div><b>2 · Emparejar</b><span>Por CUPS y por periodo de facturación (fecha desde – hasta).</span></div>
+          <div><b>3 · Comparar</b><span>kWh facturados vs. kWh medidos, desviación % y €/kWh real por punto.</span></div>
+          <div><b>4 · Alertar</b><span>Puntos con desvíos, lecturas estimadas o excesos de potencia recurrentes.</span></div>
+        </div>
+        <p class="note">Cuando tengas una muestra del fichero del sistema técnico, lo conectamos aquí.</p>
+      </div>
+    </section>
+
+    <!-- ---------- CORRECCIONES ---------- -->
+    <section class="vista hide" id="v-correcciones">
+      <div class="card">
+        <div class="card-h"><h3>Reglas de corrección</h3><span class="muted sm">Se aplican a todos los cálculos al momento. El dato original no se modifica.</span></div>
+        <div class="tbl-wrap"><table class="tbl" id="tbReglas"></table></div>
+      </div>
+      <div class="card" id="cardNuevaRegla">
+        <div class="card-h"><h3>Añadir corrección</h3></div>
+        <form class="regla-form" id="fRegla">
+          <label>Cuando<select id="rCampo">
+            <option value="estado">Estado de la factura</option>
+            <option value="id_factura">ID factura</option>
+            <option value="cups">CUPS</option>
+            <option value="tipo_lectura">Tipo de lectura</option>
+            <option value="distribuidora">Distribuidora</option>
+            <option value="tarifa">Tarifa</option>
+            <option value="sheet_code">Pestaña (sheet_code)</option>
+            <option value="archivo_origen">Archivo de origen</option>
+          </select></label>
+          <label>sea igual a<input id="rValor" list="rValores" required placeholder="p. ej. A"><datalist id="rValores"></datalist></label>
+          <label>entonces<select id="rAccion">
+            <option value="negativo">Poner en negativo (consumo e importes)</option>
+            <option value="excluir">Excluir de los cálculos</option>
+          </select></label>
+          <label class="grow">Nota<input id="rNota" placeholder="Motivo de la corrección (opcional)"></label>
+          <button class="btn pri" type="submit">Guardar y actualizar</button>
+        </form>
+        <p class="note">«Poner en negativo» convierte en negativo el consumo y todos los importes de esas filas, aunque ya vinieran negativos, para que resten. «Excluir» saca la fila de dashboard, puntos y totales; sigue apareciendo en Facturas marcada.</p>
+      </div>
+      <p class="muted sm" id="reglasRO"></p>
+    </section>
+
+    <!-- ---------- CARGAR ---------- -->
+    <section class="vista hide" id="v-cargar">
+      <div class="grid g2-1">
+        <div class="card">
+          <div class="card-h"><h3>Subir facturas</h3><span class="muted sm">.xlsx · .xls · .zip · carpetas</span></div>
+          <div id="drop">
+            <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg>
+            <p><b>Arrastra aquí</b> ficheros, carpetas o ZIPs</p>
+            <div class="row">
+              <label class="btn">Elegir ficheros<input id="inFiles" type="file" multiple accept=".xlsx,.xlsm,.xls,.zip" hidden></label>
+              <label class="btn">Elegir carpeta<input id="inDir" type="file" webkitdirectory directory multiple hidden></label>
+            </div>
+          </div>
+          <ul id="cola"></ul>
+          <div class="row end">
+            <button class="btn" id="btnLimpiar">Limpiar</button>
+            <button class="btn pri" id="btnProcesar" disabled>Procesar y guardar</button>
+          </div>
+          <div id="progreso" class="hide"><div class="barra"><span id="progBar"></span></div><p class="muted sm" id="progTxt"></p></div>
+          <div id="resCarga" class="hide">
+            <div class="res-kpis" id="resKpis"></div>
+            <pre id="resLog"></pre>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>Datos guardados</h3></div>
+          <div class="stack">
+            <div class="kv"><span>Filas</span><b id="dFilas">—</b></div>
+            <div class="kv"><span>Facturas</span><b id="dFact">—</b></div>
+            <div class="kv"><span>Última carga</span><b id="dUlt">—</b></div>
+            <p class="note">Las filas repetidas se eliminan siempre: dentro de una carga y respecto a lo ya guardado en la base de datos.</p>
+            <button class="btn pri" id="btnExportAll">Descargar Excel unificado</button>
+            <button class="btn danger" id="btnVaciar">Vaciar datos</button>
+            <p class="muted sm" id="dAdmin"></p>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Historial de cargas</h3></div>
+        <div class="tbl-wrap"><table class="tbl" id="tbCargas"></table></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="tip" class="tip hide"></div>
+<div id="modal" class="modal hide">
+  <div class="card">
+    <h3>¿Vaciar todos los datos?</h3>
+    <p class="muted">Se borrarán las facturas guardadas y el historial de cargas. No se puede deshacer.</p>
+    <div class="row end"><button class="btn" id="mNo">Cancelar</button><button class="btn danger" id="mSi">Vaciar</button></div>
+  </div>
+</div>
+<div id="toast" class="toast hide"></div>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="config.js"></script>
+<script src="sb.js"></script>
+<script src="procesar.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
