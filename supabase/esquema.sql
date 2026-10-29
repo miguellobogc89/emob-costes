@@ -207,6 +207,12 @@ drop trigger if exists correcciones_cambio on public.correcciones;
 create trigger correcciones_cambio after insert or update or delete on public.correcciones
   for each statement execute function public.tg_correcciones();
 
+-- Tensión según la tarifa de acceso: 6.x = media tensión (MT); el resto, baja tensión (BT)
+create or replace function public._tension(tarifa text)
+returns text language sql immutable as $$
+  select case when upper(trim(coalesce(tarifa, ''))) like '6%' then 'MT' else 'BT' end;
+$$;
+
 -- Facturas con las correcciones aplicadas (todas las filas, con marcas)
 create or replace view public.facturas_calc with (security_invoker = true) as
 select f.huella, f.carga_id, f.cabecera_id, f.sheet_code, f.archivo_origen, f.id_factura, f.estado, f.cups,
@@ -221,13 +227,20 @@ select f.huella, f.carga_id, f.cabecera_id, f.sheet_code, f.archivo_origen, f.id
        public._neg(f.imp_energia, c.negativa) imp_energia,   public._neg(f.imp_potencia, c.negativa) imp_potencia,
        public._neg(f.imp_exceso, c.negativa) imp_exceso,     public._neg(f.imp_alquiler, c.negativa) imp_alquiler,
        public._neg(f.imp_ie, c.negativa) imp_ie,             public._neg(f.imp_otros, c.negativa) imp_otros,
-       public._neg(f.imp_iva, c.negativa) imp_iva
+       public._neg(f.imp_iva, c.negativa) imp_iva,
+       public._tension(f.tarifa) tension
 from public.facturas f
 cross join lateral (select f.negativa, f.excluida) c;
 
 -- Solo las filas que cuentan (sin excluidas): base de todos los cálculos
 create or replace view public.facturas_ok with (security_invoker = true) as
 select * from public.facturas_calc where not excluida;
+
+-- Filas que cuentan, filtradas por tensión (null = todas)
+create or replace function public._ft(p_tension text)
+returns setof public.facturas_ok language sql stable as $$
+  select * from public.facturas_ok f where p_tension is null or f.tension = p_tension;
+$$;
 
 grant select on public.facturas_calc, public.facturas_ok to authenticated;
 revoke all on public.facturas_calc, public.facturas_ok from anon;
@@ -259,11 +272,16 @@ returns date language sql immutable as $$
   select case when p_base = 'emision' then f.fecha_emision else f.fecha_hasta end;
 $$;
 
-create or replace function public.anios(p_base text default 'consumo')
+-- (las versiones sin tensión se sustituyen por las nuevas)
+drop function if exists public.anios(text);
+drop function if exists public.puntos(int, text);
+drop function if exists public.dashboard(int, text);
+
+create or replace function public.anios(p_base text default 'consumo', p_tension text default null)
 returns int[] language sql stable as $$
   select coalesce(array_agg(a order by a desc), '{}')
   from (select distinct extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base))::int a
-        from public.facturas_ok f where public._fb(f.fecha_emision, f.fecha_hasta, p_base) is not null) s;
+        from public._ft(p_tension) f where public._fb(f.fecha_emision, f.fecha_hasta, p_base) is not null) s;
 $$;
 
 create or replace function public.resumen()
@@ -278,7 +296,7 @@ returns jsonb language sql stable as $$
   );
 $$;
 
-create or replace function public.puntos(p_anio int default null, p_base text default 'consumo')
+create or replace function public.puntos(p_anio int default null, p_base text default 'consumo', p_tension text default null)
 returns table (cups text, direccion text, distribuidora text, tarifa text, facturas bigint,
                kwh numeric, neto numeric, total numeric, eur_kwh numeric, exceso_eur numeric,
                desde date, hasta date)
@@ -295,13 +313,13 @@ language sql stable as $$
          coalesce(sum(f.imp_exceso), 0),
          min(f.fecha_desde),
          max(f.fecha_hasta)
-  from public.facturas_ok f
+  from public._ft(p_tension) f
   where p_anio is null or extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base)) = p_anio
   group by f.cups
   order by 6 desc;
 $$;
 
-create or replace function public.dashboard(p_anio int default null, p_base text default 'consumo')
+create or replace function public.dashboard(p_anio int default null, p_base text default 'consumo', p_tension text default null)
 returns jsonb language plpgsql stable as $$
 declare
   r jsonb;
@@ -312,7 +330,7 @@ begin
   select array_agg(distinct extract(month from public._fb(f.fecha_emision, f.fecha_hasta, p_base))::int),
          count(distinct f.id_factura)
     into v_meses, v_fact
-  from public.facturas_ok f
+  from public._ft(p_tension) f
   where p_anio is null or extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base)) = p_anio;
 
   if v_fact = 0 then
@@ -324,14 +342,14 @@ begin
              jsonb_build_object('kwh', coalesce(sum(f.kwh), 0), 'neto', coalesce(sum(f.imp_neto), 0))
            end
       into v_prev
-    from public.facturas_ok f
+    from public._ft(p_tension) f
     where extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base)) = p_anio - 1
       and extract(month from public._fb(f.fecha_emision, f.fecha_hasta, p_base))::int = any (v_meses);
   end if;
 
   with f as (
     select f.*, public._fb(f.fecha_emision, f.fecha_hasta, p_base) as fecha
-    from public.facturas_ok f
+    from public._ft(p_tension) f
     where p_anio is null or extract(year from public._fb(f.fecha_emision, f.fecha_hasta, p_base)) = p_anio
   ),
   kpi as (
@@ -371,6 +389,7 @@ begin
     'vacio', false,
     'anio',  p_anio,
     'base',  p_base,
+    'tension', p_tension,
     'kpi',   (select j from kpi),
     'previo', case when v_prev is not null then v_prev || jsonb_build_object('meses', to_jsonb(v_meses)) end,
     'mensual', (select jsonb_agg(jsonb_build_object(
@@ -400,7 +419,7 @@ begin
                   order by c.o) s),
     'top', (select coalesce(jsonb_agg(jsonb_build_object('cups', p.cups, 'direccion', p.direccion,
                     'kwh', p.kwh, 'neto', p.neto, 'eur_kwh', p.eur_kwh)), '[]')
-            from (select * from public.puntos(p_anio, p_base) limit 10) p),
+            from (select * from public.puntos(p_anio, p_base, p_tension) limit 10) p),
     'lecturas', (select coalesce(jsonb_agg(jsonb_build_object('tipo', tipo_lectura, 'facturas', n)
                     order by n desc), '[]') from lect)
   ) into r;
@@ -423,11 +442,11 @@ begin
 end;
 $$;
 
-grant execute on function public.anios(text), public.resumen(), public.puntos(int, text),
-                 public.dashboard(int, text), public.vaciar(), public.es_admin(),
+grant execute on function public.anios(text, text), public.resumen(), public.puntos(int, text, text),
+                 public.dashboard(int, text, text), public.vaciar(), public.es_admin(),
                  public.correcciones_resumen(), public.valores_campo(text) to authenticated;
-revoke execute on function public.anios(text), public.resumen(), public.puntos(int, text),
-                  public.dashboard(int, text), public.vaciar() from anon, public;
+revoke execute on function public.anios(text, text), public.resumen(), public.puntos(int, text, text),
+                  public.dashboard(int, text, text), public.vaciar() from anon, public;
 
 
 -- ---------------------------------------------------------------- analítico del equipo
@@ -472,7 +491,7 @@ returns jsonb language sql stable as $$
   ),
   nuestro as (
     select extract(month from f.fecha_hasta)::int mes,
-           case when upper(coalesce(f.tarifa, '')) like '6%' then 'MT' else 'BT' end seg,
+           f.tension seg,
            sum(f.kwh) kwh, sum(f.imp_energia) energia,
            coalesce(sum(f.imp_potencia), 0) + coalesce(sum(f.imp_alquiler), 0) fijo,
            sum(f.imp_neto) neto, count(distinct f.id_factura) facturas

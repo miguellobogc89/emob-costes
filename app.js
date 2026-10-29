@@ -1,7 +1,7 @@
 /* eMob · Costes de energía — web (Supabase) */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
-const ST = { vista: 'inicio', base: 'consumo', anio: null, admin: false, f: { pag: 1, orden: null, dir: 'asc' }, p: { orden: 'kwh', dir: 'desc' } };
+const ST = { vista: 'inicio', base: 'consumo', tension: 'BT', anio: null, admin: false, f: { pag: 1, orden: null, dir: 'asc' }, p: { orden: 'kwh', dir: 'desc' } };
 const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 const SB = new Supabase(EMOB_CONFIG.supabaseUrl, EMOB_CONFIG.supabaseKey);
 
@@ -57,7 +57,7 @@ async function seguro(fn) {
     console.error(e); toast('Error: ' + e.message, 6000); return null;
   }
 }
-const args = () => ({ p_anio: ST.anio, p_base: ST.base });
+const args = () => ({ p_anio: ST.anio, p_base: ST.base, p_tension: ST.tension || null });
 /** Filtro de año para consultas REST sobre la columna de fecha de la base elegida */
 function filtroAnio(q) {
   if (!ST.anio) return q;
@@ -221,7 +221,7 @@ async function cargarDashboard() {
 
 function pintarDashboard() {
   const d = DASH, k = d.kpi, per = d.anio ? d.anio : 'todo el histórico';
-  $('#kHeroLbl').textContent = `Consumo facturado · ${per}`;
+  $('#kHeroLbl').textContent = `Consumo facturado · ${per} · ${ST.tension || 'BT + MT'}`;
   $('#kKwh').textContent = fN(k.kwh / 1000, 0);
   $('#kHeroSub').textContent = `${fN(k.facturas)} facturas · ${fN(k.anuladas)} anuladas · ${fN(k.rectificativas)} rectificativas`;
   const dl = $('#kDelta');
@@ -243,7 +243,7 @@ function pintarDashboard() {
   const mens = d.mensual.map((m) => ({ ...m, label: MESES[m.mes - 1], value: m.kwh }));
   // consumo BT del analítico del equipo (solo por mes de consumo y si hay analítico de ese año)
   const eqBT = {};
-  if (d.base === 'consumo' && d.anio && COMP?.anio === d.anio && COMP.carga)
+  if (d.base === 'consumo' && d.tension === 'BT' && d.anio && COMP?.anio === d.anio && COMP.carga)
     for (const v of COMP.equipo) if (v.seg === 'BT' && v.concepto === 'consumo') eqBT[v.mes] = +v.valor;
   const conEquipo = Object.keys(eqBT).length > 0;
   $('#legMens').classList.toggle('hide', !conEquipo);
@@ -286,7 +286,7 @@ function pintarDashboard() {
 // ---------------------------------------------------------------- FACTURAS
 const COLS_F = [
   ['mes_emision', 'MES EMISIÓN'], ['id_factura', 'ID PSEUDOFACTURA'], ['estado', 'ESTADO'], ['cups', 'CUPS'], ['direccion', 'DIRECCIÓN PS'],
-  ['tarifa', 'TARIFA ATR'], ['distribuidora', 'DISTRIBUIDORA'], ['fecha_emision', 'FECHA EMISIÓN', 'f'], ['fecha_desde', 'DESDE', 'f'],
+  ['tarifa', 'TARIFA ATR'], ['tension', 'TENSIÓN'], ['distribuidora', 'DISTRIBUIDORA'], ['fecha_emision', 'FECHA EMISIÓN', 'f'], ['fecha_desde', 'DESDE', 'f'],
   ['fecha_hasta', 'HASTA', 'f'], ['tipo_lectura', 'TIPO LECTURA'], ['kwh', 'CONSUMO TOTAL kWh', 'n'],
   ['kwh_p1', 'P1 kWh', 'n'], ['kwh_p2', 'P2 kWh', 'n'], ['kwh_p3', 'P3 kWh', 'n'], ['kwh_p4', 'P4 kWh', 'n'], ['kwh_p5', 'P5 kWh', 'n'], ['kwh_p6', 'P6 kWh', 'n'],
   ['imp_neto', 'IMPORTE NETO €', 'e'], ['imp_total', 'IMPORTE TOTAL €', 'e'], ['sheet_code', 'sheet_code'], ['archivo_origen', 'archivo_origen'],
@@ -301,9 +301,12 @@ async function cabeceras() {
   return CABS;
 }
 function queryFacturas() {
-  const q = filtroAnio({});
+  const q = {}; const conds = [];
+  if (ST.anio) { const c = ST.base === 'emision' ? 'fecha_emision' : 'fecha_hasta'; conds.push(`${c}.gte.${ST.anio}-01-01`, `${c}.lt.${ST.anio + 1}-01-01`); }
+  if (ST.tension) conds.push(`tension.eq.${ST.tension}`);
   const t = $('#fQ').value.trim().replace(/[",()]/g, ' ');
-  if (t) q.or = `(${['cups', 'direccion', 'id_factura', 'sheet_code'].map((c) => `${c}.ilike."*${t}*"`).join(',')})`;
+  if (t) conds.push(`or(${['cups', 'direccion', 'id_factura', 'sheet_code'].map((c) => `${c}.ilike."*${t}*"`).join(',')})`);
+  if (conds.length) q.and = `(${conds.join(',')})`;
   if ($('#fEstado').value) q.estado = 'eq.' + $('#fEstado').value;
   q.order = ST.f.orden ? `${ST.f.orden}.${ST.f.dir}.nullslast,huella` : 'fecha_emision.asc.nullslast,huella';
   return q;
@@ -360,13 +363,13 @@ function descargar(ws, nombreHoja, fichero) {
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, nombreHoja);
   XLSX.writeFile(wb, fichero);
 }
-const META_EXPORT = ['MES EMISIÓN', 'sheet_code', 'archivo_origen', 'CORRECCIÓN'];
+const META_EXPORT = ['MES EMISIÓN', 'TENSIÓN', 'sheet_code', 'archivo_origen', 'CORRECCIÓN'];
 const A_NEGATIVO = /^(CONSUMO|IMPORTE|CANTIDAD)/i;   // columnas que cambian de signo con la corrección «negativo»
 async function exportarFilas(q, nombre, boton) {
   const txt = boton.textContent; boton.disabled = true;
   try {
     const cabs = await cabeceras();
-    q.select = 'mes_emision,sheet_code,archivo_origen,cabecera_id,valores,negativa,excluida';
+    q.select = 'mes_emision,tension,sheet_code,archivo_origen,cabecera_id,valores,negativa,excluida';
     const filas = await SB.todo((limit, offset) => SB.select('facturas_calc', { ...q, limit, offset }),
       (n) => { boton.textContent = `Descargando… ${fN(n)}`; });
     // columnas: unión de las cabeceras usadas, en orden de aparición
@@ -385,7 +388,7 @@ async function exportarFilas(q, nombre, boton) {
         row[j] = v;
       });
       const corr = [f.negativa ? 'En negativo' : '', f.excluida ? 'Excluida' : ''].filter(Boolean).join(' · ');
-      aoa.push([f.mes_emision, f.sheet_code, f.archivo_origen, corr || null, ...row]);
+      aoa.push([f.mes_emision, f.tension, f.sheet_code, f.archivo_origen, corr || null, ...row]);
     }
     boton.textContent = 'Generando Excel…';
     await new Promise((r) => setTimeout(r, 30));
@@ -403,7 +406,7 @@ const P_COLS = [
 ];
 let PUNTOS = { clave: null, filas: [] };
 async function datosPuntos() {
-  const clave = `${ST.anio}|${ST.base}`;
+  const clave = `${ST.anio}|${ST.base}|${ST.tension}`;
   if (PUNTOS.clave !== clave) {
     const filas = await SB.todo((limit, offset) => SB.rpc('puntos', args(), { limit, offset }));
     PUNTOS = { clave, filas };
@@ -795,7 +798,8 @@ function mostrarVista(v) {
   $$('.vista').forEach((s) => s.classList.toggle('hide', s.id !== 'v-' + v));
   $('#titulo').textContent = TITULOS[v][0]; $('#subtitulo').textContent = TITULOS[v][1];
   $('#filtros').classList.toggle('hide', !['inicio', 'facturas', 'cups', 'comparativa'].includes(v));
-  $('#segBase').classList.toggle('hide', v === 'comparativa');   // la comparativa va siempre por mes de consumo
+  $('#segBase').classList.toggle('hide', v === 'comparativa');
+  $('#segTension').classList.toggle('hide', v === 'comparativa');   // la comparativa es siempre BT   // la comparativa va siempre por mes de consumo
   if (v === 'inicio') skDashboard();
 }
 function refrescar() {
@@ -807,7 +811,7 @@ function refrescar() {
   else if (ST.vista === 'comparativa') cargarComparativa();
 }
 async function refrescarAnios() {
-  const [anios, res] = await Promise.all([seguro(() => SB.rpc('anios', { p_base: ST.base })), seguro(() => SB.rpc('resumen'))]);
+  const [anios, res] = await Promise.all([seguro(() => SB.rpc('anios', { p_base: ST.base, p_tension: ST.tension || null })), seguro(() => SB.rpc('resumen'))]);
   if (!anios || !res) {
     // sin respuesta: se usa el año en curso para no bloquear la carga y se reintenta en segundo plano
     if (ST.anio == null && !ST.todo) ST.anio = new Date().getFullYear();
@@ -846,10 +850,11 @@ async function entrarApp() {
   refrescar();
 }
 // filtros recordados en este navegador
-function guardarFiltros() { try { localStorage.setItem('emob.filtros', JSON.stringify({ base: ST.base, anio: ST.anio })); } catch { /* sin almacenamiento */ } }
+function guardarFiltros() { try { localStorage.setItem('emob.filtros', JSON.stringify({ base: ST.base, anio: ST.anio, tension: ST.tension })); } catch { /* sin almacenamiento */ } }
 function leerFiltros() {
-  try { const f = JSON.parse(localStorage.getItem('emob.filtros') || 'null'); if (f) { ST.base = f.base === 'emision' ? 'emision' : 'consumo'; ST.anio = f.anio ?? null; ST.todo = f.anio === null; } } catch { /* nada */ }
+  try { const f = JSON.parse(localStorage.getItem('emob.filtros') || 'null'); if (f) { ST.base = f.base === 'emision' ? 'emision' : 'consumo'; ST.anio = f.anio ?? null; ST.todo = f.anio === null; if (['BT', 'MT', ''].includes(f.tension)) ST.tension = f.tension; } } catch { /* nada */ }
   $$('#segBase button').forEach((x) => x.classList.toggle('on', x.dataset.b === ST.base));
+  $$('#segTension button').forEach((x) => x.classList.toggle('on', x.dataset.t === ST.tension));
 }
 
 function init() {
@@ -895,6 +900,10 @@ function init() {
   $$('#segBase button').forEach((b) => b.onclick = async () => {
     $$('#segBase button').forEach((x) => x.classList.toggle('on', x === b));
     ST.base = b.dataset.b; ST.f.pag = 1; if (ST.vista === 'inicio') skDashboard(); await refrescarAnios(); guardarFiltros(); refrescar();
+  });
+  $$('#segTension button').forEach((b) => b.onclick = async () => {
+    $$('#segTension button').forEach((x) => x.classList.toggle('on', x === b));
+    ST.tension = b.dataset.t; ST.f.pag = 1; if (ST.vista === 'inicio') skDashboard(); await refrescarAnios(); guardarFiltros(); refrescar();
   });
   $('#selAnio').onchange = (e) => { ST.anio = e.target.value ? +e.target.value : null; ST.todo = !e.target.value; ST.f.pag = 1; guardarFiltros(); refrescar(); };
   let t; const deb = (fn) => () => { clearTimeout(t); t = setTimeout(fn, 300); };
