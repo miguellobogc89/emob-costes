@@ -252,7 +252,7 @@ function pintarDashboard() {
   $('#legMens').classList.toggle('hide', !conEquipo);
   const tipMes = (m) => tipRows(`${MESES[m.mes - 1]} ${d.anio ?? ''}`, (m.kwh == null ? [['Facturas', 'sin facturas']] :
     [['Consumo facturas', fN(m.kwh) + ' kWh'], ['Importe sin IVA', fEur(m.neto)], ['€/kWh', m.eur_kwh == null ? '—' : fN(m.eur_kwh, 3)], ['Facturas', fN(m.facturas)]])
-    .concat(conEquipo ? [['Equipo (BT)', eqBT[m.mes] == null ? '—' : fN(Math.round(eqBT[m.mes])) + ' kWh'], ['Desviación', fPct(pct(m.kwh, eqBT[m.mes]))]] : []));
+    .concat(conEquipo ? [['evOS (BT)', eqBT[m.mes] == null ? '—' : fN(Math.round(eqBT[m.mes])) + ' kWh'], ['Desviación', fPct(pct(m.kwh, eqBT[m.mes]))]] : []));
   if (conEquipo) groupedChart($('#chMensual'), mens.map((m) => ({ ...m, a: m.kwh, b: eqBT[m.mes] ?? null })), { tipFn: tipMes });
   else columnChart($('#chMensual'), mens, { tipFn: tipMes });
   lineChart($('#chEurKwh'), mens.map((m) => ({ ...m, value: m.eur_kwh })), {
@@ -275,7 +275,7 @@ function pintarDashboard() {
   });
   const est = d.lecturas.filter((l) => /estimad/i.test(l.tipo)).reduce((a, c) => a + c.facturas, 0);
   $('#notaLect').textContent = est
-    ? `${fN(est)} facturas (${fN((est / ltot) * 100, 1)} %) con lectura estimada: son las primeras candidatas a revisar en el cruce con el sistema técnico.`
+    ? `${fN(est)} facturas (${fN((est / ltot) * 100, 1)} %) con lectura estimada: son las primeras candidatas a revisar en el cruce con evOS.`
     : 'No hay facturas con lectura estimada en este periodo.';
 
   const tmax = Math.max(...d.top.map((t) => t.kwh), 1);
@@ -526,9 +526,9 @@ function calcComp(d, seg) {
 
 function statsComp(r, conTitulo) {
   return [
-    `<div><span class="k">Consumo · ${r.comparables} ${r.comparables === 1 ? 'mes comparable' : 'meses comparables'}</span><span class="v">${fN(r.kFc / 1000)} MWh</span><span class="s">equipo: ${fN(r.kEc / 1000)} MWh</span></div>`,
-    `<div><span class="k">Desviación de consumo</span><span class="v">${desv(r.dk)}</span><span class="s">facturas vs. equipo</span></div>`,
-    `<div><span class="k">Coste €/kWh (sin RevShare)</span><span class="v">${r.totF == null ? '—' : fN(r.totF, 3)}</span><span class="s">equipo CV+CF: ${r.totE == null ? '—' : fN(r.totE, 3)}</span></div>`,
+    `<div><span class="k">Consumo · ${r.comparables} ${r.comparables === 1 ? 'mes comparable' : 'meses comparables'}</span><span class="v">${fN(r.kFc / 1000)} MWh</span><span class="s">evOS: ${fN(r.kEc / 1000)} MWh</span></div>`,
+    `<div><span class="k">Desviación de consumo</span><span class="v">${desv(r.dk)}</span><span class="s">facturas vs. evOS</span></div>`,
+    `<div><span class="k">Coste €/kWh (sin RevShare)</span><span class="v">${r.totF == null ? '—' : fN(r.totF, 3)}</span><span class="s">evOS CV+CF: ${r.totE == null ? '—' : fN(r.totE, 3)}</span></div>`,
     `<div><span class="k">Desviación de coste</span><span class="v">${desv(r.dt)}</span><span class="s">${conTitulo ? 'mismos meses' : 'ponderada por consumo'}</span></div>`,
   ].join('');
 }
@@ -560,8 +560,8 @@ async function cargarComparativa() {
   const anio = d.anio;
   if (!d.carga) {
     $('#compCuerpo').classList.add('hide'); $('#compVacio').classList.remove('hide');
-    $('#compVacio').innerHTML = `No hay analítico del equipo para <b>${anio}</b>.<br>Súbelo con el botón «Subir Excel del equipo».` +
-      (d.anios_equipo.length ? `<br><span class="sm">Hay analítico de: ${d.anios_equipo.join(', ')}. Cambia el año arriba.</span>` : '');
+    $('#compVacio').innerHTML = `No hay datos de evOS para <b>${anio}</b>.<br>Súbelos con el botón «Subir Excel de evOS».` +
+      (d.anios_equipo.length ? `<br><span class="sm">Hay datos de evOS de: ${d.anios_equipo.join(', ')}. Cambia el año arriba.</span>` : '');
     $('#tbComp').innerHTML = ''; $('#compSeg').textContent = '';
     return;
   }
@@ -569,10 +569,10 @@ async function cargarComparativa() {
   const r = calcComp(d, ST.seg);
   $('#compKpis').innerHTML = statsComp(r);
   groupedChart($('#chComp'), r.meses, {
-    tipFn: (m) => tipRows(`${m.label} ${anio}`, [['Facturas', m.kF == null ? 'sin facturas' : fN(m.kF) + ' kWh'], ['Equipo', m.kE == null ? '—' : fN(Math.round(m.kE)) + ' kWh'], ['Desviación', fPct(m.dk)]]),
+    tipFn: (m) => tipRows(`${m.label} ${anio}`, [['Facturas', m.kF == null ? 'sin facturas' : fN(m.kF) + ' kWh'], ['evOS', m.kE == null ? '—' : fN(Math.round(m.kE)) + ' kWh'], ['Desviación', fPct(m.dk)]]),
   });
   const segTxt = 'Baja tensión (BT)';
-  $('#compSeg').textContent = `${segTxt} · ${anio} · por mes de consumo${r.pyc != null ? ` · PYC del equipo: ${fN(r.pyc, 4)} €/kWh` : ''}`;
+  $('#compSeg').textContent = `${segTxt} · ${anio} · por mes de consumo${r.pyc != null ? ` · PYC de evOS: ${fN(r.pyc, 4)} €/kWh` : ''}`;
   const f3 = (v) => (v == null ? '—' : fN(v, 3));
   const fila = (m) => `<tr${m.comparable ? '' : ' class="muted"'}>
     <td>${m.label}</td>
@@ -584,9 +584,9 @@ async function cargarComparativa() {
   $('#tbComp').classList.remove('loading');
   $('#tbComp').innerHTML = `<thead>
     <tr><th></th><th colspan="3" class="grp sep">Consumo (kWh)</th><th colspan="2" class="grp sep">Variable €/kWh</th><th colspan="2" class="grp sep">Fijo €/kWh</th><th colspan="3" class="grp sep">Total €/kWh</th><th class="grp sep">€/kWh</th></tr>
-    <tr><th>Mes</th><th class="num sep">Facturas</th><th class="num">Equipo</th><th class="num">Desv.</th>
-    <th class="num sep">Energía fact.</th><th class="num">CV equipo</th><th class="num sep">Pot.+alq. fact.</th><th class="num">CF equipo</th>
-    <th class="num sep">Facturas</th><th class="num">CV+CF eq.</th><th class="num">Desv.</th><th class="num sep">RevShare eq.</th></tr></thead><tbody>` +
+    <tr><th>Mes</th><th class="num sep">Facturas</th><th class="num">evOS</th><th class="num">Desv.</th>
+    <th class="num sep">Energía fact.</th><th class="num">CV evOS</th><th class="num sep">Pot.+alq. fact.</th><th class="num">CF evOS</th>
+    <th class="num sep">Facturas</th><th class="num">CV+CF evOS</th><th class="num">Desv.</th><th class="num sep">RevShare evOS</th></tr></thead><tbody>` +
     r.meses.map(fila).join('') +
     `<tr class="tot"><td>Meses comparables</td><td class="num sep">${fN(r.kFc)}</td><td class="num">${fN(Math.round(r.kEc))}</td><td class="num">${desv(r.dk)}</td>
      <td class="sep" colspan="4"></td><td class="num sep">${f3(r.totF)}</td><td class="num">${f3(r.totE)}</td><td class="num">${desv(r.dt)}</td><td class="sep"></td></tr></tbody>`;
@@ -596,7 +596,7 @@ function pintarAnaEstado(d) {
   const c = d.carga;
   $('#anaEstado').innerHTML = c
     ? `Usando para <b>${d.anio}</b>: <b>${esc(c.archivo || 'sin nombre')}</b><br><span class="sm">subido el ${fFechaHora(c.fecha)}${c.usuario_email ? ' por ' + esc(c.usuario_email) : ''}</span>`
-    : `Aún no hay analítico del equipo para <b>${d.anio}</b>.`;
+    : `Aún no hay datos de evOS para <b>${d.anio}</b>.`;
 }
 async function cargarHistorialAna() {
   const h = await seguro(() => SB.select('analitico_cargas', { select: '*', order: 'fecha.desc', limit: 20 }));
@@ -606,7 +606,7 @@ async function cargarHistorialAna() {
   $$('.aDel').forEach((b) => b.onclick = async () => {
     if (b.dataset.ok !== '1') { b.dataset.ok = '1'; b.textContent = '¿Seguro?'; setTimeout(() => { b.dataset.ok = ''; b.textContent = 'Borrar'; }, 3000); return; }
     await seguro(() => SB.rest('DELETE', 'analitico_cargas', { query: { id: 'eq.' + b.dataset.id }, prefer: 'return=minimal' }));
-    COMP = null; cargarComparativa(); toast('Analítico borrado');
+    COMP = null; cargarComparativa(); toast('Datos de evOS borrados');
   });
 }
 async function subirAnalitico(file) {
@@ -616,10 +616,10 @@ async function subirAnalitico(file) {
     await SB.insert('analitico_valores', r.valores.map((v) => ({ carga_id: c.id, ...v })), { prefer: 'return=minimal' });
     COMP = null;
     if (ST.anio !== r.anio) { ST.anio = r.anio; ST.todo = false; $('#selAnio').value = r.anio; guardarFiltros(); }
-    toast(`Analítico ${r.anio} guardado: ${r.valores.length} valores${r.avisos.length ? ' · ' + r.avisos.join(' ') : ''}`, 7000);
+    toast(`Datos de evOS ${r.anio} guardados: ${r.valores.length} valores${r.avisos.length ? ' · ' + r.avisos.join(' ') : ''}`, 7000);
     cargarComparativa();
   } catch (e) {
-    if (e.message === 'sin_sesion') mostrarLogin(); else toast('No se pudo leer el Excel del equipo: ' + e.message, 9000);
+    if (e.message === 'sin_sesion') mostrarLogin(); else toast('No se pudo leer el Excel de evOS: ' + e.message, 9000);
   }
 }
 
@@ -811,8 +811,8 @@ const TITULOS = {
   inicio: ['Inicio', 'Resumen de consumo y coste de la red de recarga'],
   facturas: ['Facturas', 'Todas las líneas de factura unificadas, sin duplicados'],
   cups: ['CUPS', 'Consumo y coste agregados por CUPS (un CUPS puede agrupar varios puntos de recarga)'],
-  cruce: ['Cruce con sistema técnico', 'Facturado vs. medido'],
-  comparativa: ['Comparativa', 'Facturas frente al analítico que monta el equipo'],
+  cruce: ['Cruce con evOS', 'Facturado por Endesa vs. medido en evOS, CUPS a CUPS'],
+  comparativa: ['Comparativa', 'Facturas de Endesa frente a los datos de evOS'],
   correcciones: ['Correcciones', 'Reglas para corregir cómo cuentan algunas facturas'],
   cargar: ['Cargar datos', 'Sube Excels, carpetas o ZIPs de facturación agrupada'],
 };

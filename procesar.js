@@ -147,7 +147,7 @@ async function prepararFilas(nombreArchivo, partes, vistas, log) {
 }
 
 // ---------------------------------------------------------------- analítico del equipo
-/** Lee el Excel "Costes por BT y MT" que monta el equipo.
+/** Lee el Excel "Costes por BT y MT" que se saca de evOS.
  *  Busca por etiquetas (no por celdas fijas): bloques BT y MT en la columna A, filas CONSUMO,
  *  fila de fechas (meses) y filas CV / RevShare / CF, y la columna "de los cuales PYC".
  *  Devuelve { anio, valores: [{segmento, concepto, mes, valor}], avisos: [] } */
@@ -203,7 +203,7 @@ function leerAnalitico(datos) {
     for (let i = iPrimero - 1; i >= 0; i--) if (tieneConsumo(aoa[i])) { if (mesesRef) leerFila(aoa[i], mesesRef, 'TOTAL', 'consumo'); break; }
 
     const anio = +Object.entries(anios).sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (!anio) throw new Error('No encuentro los meses (fechas) en el Excel del equipo.');
+    if (!anio) throw new Error('No encuentro los meses (fechas) en el Excel de evOS.');
     if (!valores.some((v) => v.concepto === 'consumo')) throw new Error('No encuentro filas de CONSUMO con números. Si el Excel tiene fórmulas, ábrelo y guárdalo en Excel antes de subirlo.');
     // si no viene el total, se calcula como BT + MT
     if (!valores.some((v) => v.segmento === 'TOTAL')) {
@@ -212,5 +212,5 @@ function leerAnalitico(datos) {
     }
     return { anio, valores, avisos, hoja: nombre };
   }
-  throw new Error('No parece el Excel del analítico: no encuentro los bloques «BT» / «MT» en la columna A.');
+  throw new Error('No parece el Excel de evOS: no encuentro los bloques «BT» / «MT» en la columna A.');
 }

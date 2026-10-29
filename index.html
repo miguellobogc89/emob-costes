@@ -38,7 +38,7 @@
       <a href="#facturas" data-v="facturas"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>Facturas</a>
       <a href="#cups" data-v="cups"><svg viewBox="0 0 24 24"><path d="M7 21V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v16M5 21h13M16 9h2a1 1 0 0 1 1 1v6a1.5 1.5 0 0 0 3 0V8l-2-2M12 7l-2 4h3l-2 4"/></svg>CUPS</a>
       <a href="#comparativa" data-v="comparativa"><svg viewBox="0 0 24 24"><path d="M12 4v16M5 8h14M5 8l-3 7a3 3 0 0 0 6 0zM19 8l-3 7a3 3 0 0 0 6 0zM8 20h8"/></svg>Comparativa</a>
-      <a href="#cruce" data-v="cruce"><svg viewBox="0 0 24 24"><path d="M4 7h11l-3-3M20 17H9l3 3"/></svg>Cruce sistema técnico<span class="pill">Pronto</span></a>
+      <a href="#cruce" data-v="cruce"><svg viewBox="0 0 24 24"><path d="M4 7h11l-3-3M20 17H9l3 3"/></svg>Cruce con evOS<span class="pill">Pronto</span></a>
       <div class="sep"></div>
       <a href="#correcciones" data-v="correcciones"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></svg>Correcciones</a>
       <a href="#cargar" data-v="cargar"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg>Cargar datos</a>
@@ -95,14 +95,14 @@
         </div>
 
         <div class="card comp-mini hide" id="cardComp">
-          <div class="card-h"><h3>Contraste con el analítico del equipo (BT)<button class="info" type="button" aria-label="Qué significa" data-info="Compara lo que sale de las facturas con el Excel que monta el equipo a mano, solo en los meses que hay en ambos. Por mes de consumo. Si la desviación es grande, conviene revisar ese mes en la sección Comparativa.">i</button></h3><a href="#comparativa" class="link sm">Ver comparativa →</a></div>
+          <div class="card-h"><h3>Contraste con evOS (BT)<button class="info" type="button" aria-label="Qué significa" data-info="Compara lo que sale de las facturas con los datos de evOS (el sistema técnico), solo en los meses que hay en ambos. Por mes de consumo. Si la desviación es grande, conviene revisar ese mes en la sección Comparativa.">i</button></h3><a href="#comparativa" class="link sm">Ver comparativa →</a></div>
           <div class="comp-stats" id="compStats"></div>
         </div>
 
         <div class="grid g2-1">
           <div class="card">
-            <div class="card-h"><h3>Consumo mensual<button class="info" type="button" aria-label="Qué significa" data-info="Cada barra azul es un mes y su altura son los kWh facturados. Si hay analítico del equipo para ese año, la barra naranja es su consumo BT (solo con «Mes de consumo»). Pasa el ratón por encima para ver el detalle. Un mes sin barra azul suele ser un mes aún no facturado.">i</button></h3><span class="muted sm" id="hMens">kWh</span></div>
-            <div class="leyenda hide" id="legMens"><span><i class="sw1"></i>Facturas</span><span><i class="sw2"></i>Analítico del equipo (BT)</span></div>
+            <div class="card-h"><h3>Consumo mensual<button class="info" type="button" aria-label="Qué significa" data-info="Cada barra azul es un mes y su altura son los kWh facturados. Si hay datos de evOS para ese año, la barra naranja es el consumo BT según evOS (solo con «Mes de consumo»). Pasa el ratón por encima para ver el detalle. Un mes sin barra azul suele ser un mes aún no facturado.">i</button></h3><span class="muted sm" id="hMens">kWh</span></div>
+            <div class="leyenda hide" id="legMens"><span><i class="sw1"></i>Facturas</span><span><i class="sw2"></i>evOS (BT)</span></div>
             <div class="chart" id="chMensual"></div>
           </div>
           <div class="card">
@@ -173,22 +173,22 @@
       <div class="grid g2-1 g-top">
         <div class="card">
           <div class="card-h">
-            <h3>Facturas vs. analítico del equipo (BT)<button class="info" type="button" aria-label="Qué significa" data-info="Las barras azules salen de las facturas de Endesa cargadas aquí; las naranjas, del Excel del equipo. Siempre por mes de consumo. Los meses sin factura todavía no son comparables.">i</button></h3>
+            <h3>Facturas vs. evOS (BT)<button class="info" type="button" aria-label="Qué significa" data-info="Las barras azules salen de las facturas de Endesa cargadas aquí; las naranjas, de evOS (el sistema técnico). Siempre por mes de consumo. Los meses sin factura todavía no son comparables.">i</button></h3>
             <span class="pill-bt">Solo BT</span>
           </div>
           <div id="compVacio" class="empty-mini hide"></div>
           <div id="compCuerpo">
             <div class="comp-stats" id="compKpis"></div>
-            <div class="leyenda"><span><i class="sw1"></i>Facturas</span><span><i class="sw2"></i>Analítico del equipo</span></div>
+            <div class="leyenda"><span><i class="sw1"></i>Facturas</span><span><i class="sw2"></i>evOS</span></div>
             <div class="chart" id="chComp"></div>
           </div>
         </div>
         <div class="card">
-          <div class="card-h"><h3>Analítico del equipo</h3></div>
+          <div class="card-h"><h3>Datos de evOS</h3></div>
           <div class="stack">
             <div id="anaEstado" class="muted"></div>
-            <label class="btn pri">Subir Excel del equipo<input id="anaFile" type="file" accept=".xlsx,.xlsm,.xls" hidden></label>
-            <p class="note">Es el Excel «Costes por BT y MT» (consumo mensual y CV / RevShare / CF por BT y MT). Se guarda aparte de las facturas y, si subes otro del mismo año, la comparativa usa el más reciente.</p>
+            <label class="btn pri">Subir Excel de evOS<input id="anaFile" type="file" accept=".xlsx,.xlsm,.xls" hidden></label>
+            <p class="note">Es el Excel «Costes por BT y MT» que se saca de evOS (consumo mensual y CV / RevShare / CF por BT y MT). Se guarda aparte de las facturas y, si subes otro del mismo año, la comparativa usa el más reciente.</p>
             <div class="tbl-wrap"><table class="tbl" id="tbAna"></table></div>
           </div>
         </div>
@@ -196,7 +196,7 @@
       <div class="card">
         <div class="card-h"><h3>Detalle por mes</h3><span class="muted sm" id="compSeg"></span></div>
         <div class="tbl-wrap"><table class="tbl" id="tbComp"></table></div>
-        <p class="note"><b>Cómo se compara.</b> Consumo: kWh facturados por mes de consumo. <b>CV</b> se compara con el término de energía de las facturas (€/kWh); <b>CF</b>, con potencia contratada + alquiler de equipos (€/kWh); el <b>total</b> de las facturas incluye todo sin IVA (también excesos, impuesto eléctrico y otros conceptos) y se compara con CV + CF del equipo. El <b>RevShare</b> no aparece en las facturas de Endesa. <b>Solo BT</b> por ahora: del Excel del equipo se toma el bloque BT; de las facturas, las de tarifas BT (todas salvo 6.x).</p>
+        <p class="note"><b>Cómo se compara.</b> Consumo: kWh facturados por mes de consumo. <b>CV</b> se compara con el término de energía de las facturas (€/kWh); <b>CF</b>, con potencia contratada + alquiler de equipos (€/kWh); el <b>total</b> de las facturas incluye todo sin IVA (también excesos, impuesto eléctrico y otros conceptos) y se compara con CV + CF de evOS. El <b>RevShare</b> no aparece en las facturas de Endesa. <b>Solo BT</b> por ahora: del Excel de evOS se toma el bloque BT; de las facturas, las de tarifas BT (todas salvo 6.x).</p>
       </div>
     </section>
 
@@ -204,15 +204,15 @@
     <section class="vista hide" id="v-cruce">
       <div class="card soon">
         <span class="pill big">Próximamente</span>
-        <h2>Cruce con los consumos del sistema técnico</h2>
-        <p class="muted">Aquí se importarán las lecturas del sistema técnico y se compararán, CUPS a CUPS, con lo facturado por Endesa.</p>
+        <h2>Cruce CUPS a CUPS con evOS</h2>
+        <p class="muted">Aquí se importarán las lecturas de evOS (el sistema técnico) y se compararán, CUPS a CUPS, con lo facturado por Endesa.</p>
         <div class="steps">
-          <div><b>1 · Importar</b><span>Fichero del sistema técnico con CUPS (o punto de recarga asociado), fecha y kWh entregados.</span></div>
+          <div><b>1 · Importar</b><span>Fichero de evOS con CUPS (o punto de recarga asociado), fecha y kWh entregados.</span></div>
           <div><b>2 · Emparejar</b><span>Por CUPS y por periodo de facturación (fecha desde – hasta).</span></div>
           <div><b>3 · Comparar</b><span>kWh facturados vs. kWh medidos, desviación % y €/kWh real por CUPS.</span></div>
           <div><b>4 · Alertar</b><span>CUPS con desvíos, lecturas estimadas o excesos de potencia recurrentes.</span></div>
         </div>
-        <p class="note">Cuando tengas una muestra del fichero del sistema técnico, lo conectamos aquí.</p>
+        <p class="note">Cuando tengas una muestra del detalle por CUPS de evOS, lo conectamos aquí.</p>
       </div>
     </section>
 
