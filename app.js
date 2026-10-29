@@ -847,12 +847,31 @@ async function refrescarAnios() {
     return false;
   }
   ST.admin = !!res.admin;
+  if (res.pendientes > 0) prepararPendientes(res.pendientes);
   const sel = $('#selAnio'), prev = ST.anio;
   sel.innerHTML = anios.map((a) => `<option value="${a}">${a}</option>`).join('') + '<option value="">Todo el histórico</option>';
   ST.anio = (prev === null && ST.todo) ? null : anios.includes(prev) ? prev : (anios[0] ?? null);
   sel.value = ST.anio ?? '';
   $('#sideFoot').innerHTML = res.filas ? `${fN(res.facturas)} facturas guardadas<br>Última carga: ${esc(fFechaHora(res.ultima_carga))}` : 'Sin datos cargados';
   return true;
+}
+
+// Facturas guardadas antes de la detección de refacturaciones: se preparan por tandas
+let PREPARANDO = false;
+async function prepararPendientes(total) {
+  if (PREPARANDO) return; PREPARANDO = true;
+  const aviso = $('#aviso'); aviso.classList.remove('hide');
+  const pinta = (q) => { $('#avisoTxt').textContent = `Revisando las facturas guardadas para detectar refacturaciones y copias… ${fN(total - q)} de ${fN(total)}`; $('#avisoBar').style.width = ((total - q) / total * 100) + '%'; };
+  try {
+    let quedan = total; pinta(quedan);
+    while (quedan > 0) { quedan = await SB.rpc('rellenar_pendientes', { p_lote: 8000 }); pinta(quedan); }
+    $('#avisoTxt').textContent = 'Aplicando las reglas de facturas sustituidas…';
+    const r = await SB.rpc('recalcular_sustituidas');
+    toast(`Revisión terminada: ${fN(r.sustituidas)} filas sustituidas ya no se cuentan dos veces.`, 7000);
+    datosCambiados(); refrescar();
+  } catch (e) {
+    if (e.message === 'sin_sesion') mostrarLogin(); else toast('No se pudo terminar la revisión: ' + e.message + '. Se reintentará al pulsar «Actualizar».', 8000);
+  } finally { PREPARANDO = false; aviso.classList.add('hide'); }
 }
 
 // ---------------------------------------------------------------- acceso

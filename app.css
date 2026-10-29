@@ -271,3 +271,7 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .opcion b { display: block; }
 .opcion .muted { font-size: 13px; }
 .opcion .cifra { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.aviso { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; background: var(--accent-soft); color: #174a86; border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
+.aviso .barra { grid-column: 1 / -1; margin-top: 2px; background: #cfe0f6; }
+.sk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: latido 1s ease-in-out infinite; }
+@keyframes latido { 50% { opacity: .3; } }

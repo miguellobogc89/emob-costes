@@ -5,6 +5,9 @@
 --  y redefine funciones y reglas).
 -- =====================================================================
 
+-- Margen de tiempo para esta ejecución (la primera vez revisa todas las facturas)
+set statement_timeout = '5min';
+
 -- ---------------------------------------------------------------- tablas
 create table if not exists public.cabeceras (
   id        bigint generated always as identity primary key,
@@ -232,17 +235,53 @@ returns text language sql immutable as $$
   select case when t ~ '^-?[0-9]+(\.0+)?$' then regexp_replace(t, '\.0+$', '') else t end;
 $$;
 
--- rellena los campos de agrupada/ajuste de las filas que no los tengan
-create or replace function public._rellenar_agrupada()
-returns void language sql security definer set search_path = public as $$
+-- rellena los campos de agrupada/ajuste de las filas que no los tengan, por tandas
+-- (devuelve cuántas quedan pendientes; la web lo llama en bucle hasta 0)
+create or replace function public.rellenar_pendientes(p_lote int default 8000)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_quedan int;
+begin
+  with c as (
+    select id,
+           array_position(columnas, 'DOCUMENTO IMPRESIÓN') - 1              p_doc,
+           array_position(columnas, 'Nº FISCAL DE LA FACTURA AGRUPADA') - 1 p_fis,
+           array_position(columnas, 'FECHA EMISIÓN FACTURA AGRUPADA') - 1   p_fec,
+           array_position(columnas, 'AJUSTE PSEUDO FACTURA') - 1            p_aju
+    from public.cabeceras
+  ),
+  lote as (select huella from public.facturas where doc_agrupada is null limit greatest(p_lote, 1))
   update public.facturas f set
-    doc_agrupada   = coalesce(public._entero_txt(public._valor(f.valores, f.cabecera_id, 'DOCUMENTO IMPRESIÓN')),
-                              public._valor(f.valores, f.cabecera_id, 'Nº FISCAL DE LA FACTURA AGRUPADA'), '-'),
-    fecha_agrupada = case when public._valor(f.valores, f.cabecera_id, 'FECHA EMISIÓN FACTURA AGRUPADA') ~ '^\d{4}-\d{2}-\d{2}'
-                          then left(public._valor(f.valores, f.cabecera_id, 'FECHA EMISIÓN FACTURA AGRUPADA'), 10)::date end,
-    ajuste_de      = public._entero_txt(public._valor(f.valores, f.cabecera_id, 'AJUSTE PSEUDO FACTURA'))
-  where f.doc_agrupada is null;
+    doc_agrupada   = coalesce(public._entero_txt(nullif(trim(f.valores ->> c.p_doc), '')),
+                              nullif(trim(f.valores ->> c.p_fis), ''), '-'),
+    fecha_agrupada = case when f.valores ->> c.p_fec ~ '^\d{4}-\d{2}-\d{2}' then left(f.valores ->> c.p_fec, 10)::date end,
+    ajuste_de      = public._entero_txt(nullif(trim(f.valores ->> c.p_aju), ''))
+  from c, lote
+  where c.id = f.cabecera_id and f.huella = lote.huella;
+  select count(*) into v_quedan from public.facturas where doc_agrupada is null;
+  return v_quedan;
+end;
 $$;
+drop function if exists public._rellenar_agrupada();
+
+-- al insertar una factura nueva, se rellenan ya sus campos de agrupada/ajuste
+create or replace function public.tg_facturas_agrupada()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare cols text[];
+begin
+  if new.doc_agrupada is null then
+    select columnas into cols from public.cabeceras where id = new.cabecera_id;
+    new.doc_agrupada   := coalesce(public._entero_txt(nullif(trim(new.valores ->> (array_position(cols, 'DOCUMENTO IMPRESIÓN') - 1)), '')),
+                                   nullif(trim(new.valores ->> (array_position(cols, 'Nº FISCAL DE LA FACTURA AGRUPADA') - 1)), ''), '-');
+    new.fecha_agrupada := case when new.valores ->> (array_position(cols, 'FECHA EMISIÓN FACTURA AGRUPADA') - 1) ~ '^\d{4}-\d{2}-\d{2}'
+                               then left(new.valores ->> (array_position(cols, 'FECHA EMISIÓN FACTURA AGRUPADA') - 1), 10)::date end;
+    new.ajuste_de      := public._entero_txt(nullif(trim(new.valores ->> (array_position(cols, 'AJUSTE PSEUDO FACTURA') - 1)), ''));
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists facturas_agrupada on public.facturas;
+create trigger facturas_agrupada before insert on public.facturas
+  for each row execute function public.tg_facturas_agrupada();
 
 create table if not exists public.opciones (
   clave       text primary key,
@@ -268,7 +307,7 @@ declare
   v_copias boolean := coalesce((select activa from public.opciones where clave = 'copias_agrupadas'), true);
   n int;
 begin
-  perform public._rellenar_agrupada();
+  perform public.rellenar_pendientes(5000);   -- por si queda alguna fila antigua sin preparar
   with
   -- 1) misma pseudofactura en varias agrupadas: gana la agrupada más reciente
   docs as (
@@ -337,8 +376,8 @@ returns jsonb language sql stable as $$
     'copias', (select jsonb_build_object('filas', count(*), 'facturas', count(distinct id_factura), 'kwh', coalesce(sum(kwh), 0))
                from public.facturas where sustituida and motivo_sust like '%Copia%'));
 $$;
-grant execute on function public.recalcular_sustituidas(), public.sustituidas_resumen() to authenticated;
-revoke execute on function public.recalcular_sustituidas(), public.sustituidas_resumen() from anon, public;
+grant execute on function public.recalcular_sustituidas(), public.sustituidas_resumen(), public.rellenar_pendientes(int) to authenticated;
+revoke execute on function public.recalcular_sustituidas(), public.sustituidas_resumen(), public.rellenar_pendientes(int) from anon, public;
 
 -- Tensión según la tarifa de acceso: 6.x = media tensión (MT); el resto, baja tensión (BT)
 create or replace function public._tension(tarifa text)
@@ -425,6 +464,7 @@ returns jsonb language sql stable as $$
     'excluidas',    (select count(*) from public.facturas where excluida),
     'negativas',    (select count(*) from public.facturas where negativa),
     'sustituidas',  (select count(*) from public.facturas where sustituida),
+    'pendientes',   (select count(*) from public.facturas where doc_agrupada is null),
     'facturas',     (select count(distinct id_factura) from public.facturas),
     'ultima_carga', (select max(fecha) from public.cargas),
     'admin',        public.es_admin()
@@ -652,6 +692,6 @@ alter role authenticated set statement_timeout = '30s';
 notify pgrst, 'reload config';
 notify pgrst, 'reload schema';
 
--- Aplica las reglas actuales a las facturas ya guardadas
+-- Aplica las reglas de corrección a las facturas ya guardadas (rápido).
+-- La revisión de refacturaciones de las facturas antiguas la hace la web al entrar, por tandas.
 select public.recalcular_correcciones();
-select public.recalcular_sustituidas();
