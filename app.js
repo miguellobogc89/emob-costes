@@ -485,70 +485,73 @@ function progreso(pct, txt) {
   $('#progBar').style.width = Math.round(pct) + '%';
   $('#progTxt').textContent = txt;
 }
+const idCabCache = new Map();   // clave de columnas -> id en la tabla cabeceras
+async function idCabecera(clave, columnas) {
+  if (idCabCache.has(clave)) return idCabCache.get(clave);
+  const huella = await sha(clave);
+  let r = await SB.select('cabeceras', { select: 'id', huella: 'eq.' + huella });
+  if (!r.length) {
+    try { r = await SB.insert('cabeceras', [{ huella, columnas }], { query: { select: 'id' } }); }
+    catch { r = await SB.select('cabeceras', { select: 'id', huella: 'eq.' + huella }); }
+  }
+  idCabCache.set(clave, r[0].id); CABS = null;
+  return r[0].id;
+}
+
+/** Procesa y guarda fichero a fichero (no acumula todo en memoria: admite cargas grandes). */
 async function procesar() {
   const b = $('#btnProcesar'); b.disabled = true; b.textContent = 'Procesando…';
-  const lineas = []; const log = (l) => { lineas.push(l); $('#resLog').textContent = lineas.join('\n'); };
+  const lineas = []; const log = (l) => { lineas.push(l); $('#resLog').textContent = lineas.join('\n'); $('#resLog').scrollTop = 1e9; };
   $('#resCarga').classList.remove('hide'); $('#resKpis').innerHTML = ''; $('#resLog').textContent = '';
+  const tot = { leidas: 0, dup: 0, nuevas: 0, guardadas: 0 };
+  const pintarKpis = () => { $('#resKpis').innerHTML = [['Filas leídas', tot.leidas], ['Duplicadas en la carga', tot.dup], ['Ya existentes', tot.guardadas - tot.nuevas], ['Nuevas guardadas', tot.nuevas]]
+    .map(([k, v]) => `<div><b>${fN(v)}</b><span>${k}</span></div>`).join(''); };
+  const cola = [...COLA];
+  let carga = null;
   try {
-    progreso(2, 'Leyendo ficheros…');
-    const excels = await recolectar(COLA, log);
-    // ficheros idénticos (mismo contenido) se procesan una vez
-    const vistosF = new Map(); const unicos = [];
-    for (const e of excels) {
-      const h = await shaBuf(e.datos);
-      if (vistosF.has(h)) { log(`↷ ${e.nombre}: idéntico a ${vistosF.get(h)}, se omite`); continue; }
-      vistosF.set(h, e.nombre); unicos.push(e);
-    }
-    const vistas = new Set(); let filas = []; let dup = 0; let leidas = 0;
-    for (const [i, e] of unicos.entries()) {
-      progreso(5 + (i / unicos.length) * 35, `Leyendo ${e.nombre.split('/').pop()}…`);
-      await new Promise((r) => setTimeout(r, 20));
-      const partes = leerLibro(e.nombre, e.datos, log);
-      leidas += partes.reduce((a, p) => a + p.filas.length, 0);
-      const r = await prepararFilas(e.nombre, partes, vistas, log);
-      filas = filas.concat(r.filas); dup += r.dup;
-    }
-    if (!filas.length) { log('✖ No se encontró ningún dato.'); progreso(100, 'Sin datos'); return; }
-
-    // cabeceras (lista de columnas) -> id
-    progreso(42, 'Registrando estructura de columnas…');
-    const idCab = new Map();
-    for (const f of filas) if (!idCab.has(f._cab)) idCab.set(f._cab, f._columnas);
-    for (const [clave, columnas] of idCab) {
-      const huella = await sha(clave);
-      let r = await SB.select('cabeceras', { select: 'id', huella: 'eq.' + huella });
-      if (!r.length) {
-        try { r = await SB.insert('cabeceras', [{ huella, columnas }], { query: { select: 'id' } }); }
-        catch { r = await SB.select('cabeceras', { select: 'id', huella: 'eq.' + huella }); }
+    [carga] = await SB.insert('cargas', [{ archivos: cola.map((x) => x.n) }], { query: { select: 'id' } });
+    const vistosF = new Map(); const vistas = new Set();
+    for (const [k, item] of cola.entries()) {
+      const excels = await recolectar([item], log);          // un fichero de la cola (o el contenido de un ZIP)
+      for (const [j, e] of excels.entries()) {
+        const etiqueta = `Fichero ${k + 1} de ${cola.length}${excels.length > 1 ? ` (${j + 1}/${excels.length} del ZIP)` : ''}: ${e.nombre.split('/').pop()}`;
+        const base = (k + j / excels.length) / cola.length * 100;
+        progreso(base, `${etiqueta} · leyendo…`);
+        await new Promise((r) => setTimeout(r, 20));
+        const h = await shaBuf(e.datos);
+        if (vistosF.has(h)) { log(`↷ ${e.nombre}: idéntico a ${vistosF.get(h)}, se omite`); continue; }
+        vistosF.set(h, e.nombre);
+        const partes = leerLibro(e.nombre, e.datos, log);
+        e.datos = null;
+        tot.leidas += partes.reduce((a, p) => a + p.filas.length, 0);
+        const { filas, dup } = await prepararFilas(e.nombre, partes, vistas, log);
+        tot.dup += dup;
+        const LOTE = 200;
+        for (let i = 0; i < filas.length; i += LOTE) {
+          const lote = [];
+          for (const { _cab, _columnas, ...f } of filas.slice(i, i + LOTE)) lote.push({ ...f, cabecera_id: await idCabecera(_cab, _columnas), carga_id: carga.id });
+          const ins = await SB.insert('facturas', lote, { query: { on_conflict: 'huella', select: 'huella' }, prefer: 'return=representation,resolution=ignore-duplicates' });
+          tot.nuevas += ins.length; tot.guardadas += lote.length;
+          progreso(base + ((i + lote.length) / filas.length) * (100 / cola.length / excels.length), `${etiqueta} · guardando ${fN(i + lote.length)} / ${fN(filas.length)}`);
+        }
+        pintarKpis();
       }
-      idCab.set(clave, r[0].id);
+      await SB.update('cargas', { id: 'eq.' + carga.id }, { leidas: tot.leidas, duplicadas_en_carga: tot.dup, ya_existentes: tot.guardadas - tot.nuevas, nuevas: tot.nuevas });
     }
-    CABS = null;
-
-    // carga
-    const [carga] = await SB.insert('cargas', [{ archivos: COLA.map((x) => x.n), leidas, duplicadas_en_carga: dup }], { query: { select: 'id' } });
-
-    // facturas por lotes; la base de datos ignora las que ya existen
-    const LOTE = 200; let nuevas = 0;
-    for (let i = 0; i < filas.length; i += LOTE) {
-      const lote = filas.slice(i, i + LOTE).map(({ _cab, _columnas, ...f }) => ({ ...f, cabecera_id: idCab.get(_cab), carga_id: carga.id }));
-      const ins = await SB.insert('facturas', lote, { query: { on_conflict: 'huella', select: 'huella' }, prefer: 'return=representation,resolution=ignore-duplicates' });
-      nuevas += ins.length;
-      progreso(45 + ((i + lote.length) / filas.length) * 53, `Guardando en la base de datos… ${fN(i + lote.length)} / ${fN(filas.length)}`);
-    }
-    const ya = filas.length - nuevas;
-    await SB.update('cargas', { id: 'eq.' + carga.id }, { ya_existentes: ya, nuevas });
-    if (ya) log(`↷ ${fN(ya)} filas ya estaban guardadas de cargas anteriores, se omiten`);
-    log(`＋ ${fN(nuevas)} filas nuevas guardadas`);
-    progreso(100, 'Carga completada');
-    $('#resKpis').innerHTML = [['Filas leídas', leidas], ['Duplicadas en la carga', dup], ['Ya existentes', ya], ['Nuevas guardadas', nuevas]]
-      .map(([k, v]) => `<div><b>${fN(v)}</b><span>${k}</span></div>`).join('');
-    COLA = []; pintarCola(); datosCambiados();
-    await refrescarAnios(); cargarCargas();
+    if (!tot.leidas) log('✖ No se encontró ningún dato.');
+    if (tot.guardadas - tot.nuevas) log(`↷ ${fN(tot.guardadas - tot.nuevas)} filas ya estaban guardadas de cargas anteriores, se omiten`);
+    log(`＋ ${fN(tot.nuevas)} filas nuevas guardadas`);
+    progreso(100, 'Carga completada'); pintarKpis();
+    COLA = []; pintarCola();
   } catch (err) {
     if (err.message === 'sin_sesion') { mostrarLogin(); return; }
-    log('✖ Error: ' + err.message); progreso(100, 'Error: la carga no se completó. Puedes volver a intentarlo: no se duplicará nada.');
-  } finally { b.textContent = 'Procesar y guardar'; b.disabled = !COLA.length; }
+    log('✖ Error: ' + err.message);
+    progreso(100, 'Error: la carga no se completó. Lo ya guardado se queda; puedes volver a subir los mismos ficheros sin que se duplique nada.');
+    pintarKpis();
+  } finally {
+    b.textContent = 'Procesar y guardar'; b.disabled = !COLA.length;
+    datosCambiados(); await refrescarAnios(); cargarCargas();
+  }
 }
 
 // ---------------------------------------------------------------- navegación y filtros
