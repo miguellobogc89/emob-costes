@@ -7,6 +7,8 @@
 
 -- Margen de tiempo para esta ejecución (la primera vez revisa todas las facturas)
 set statement_timeout = '5min';
+-- las funciones se comprueban al usarlas, no al crearlas (algunas usan tablas que se crean más abajo)
+set check_function_bodies = off;
 
 -- ---------------------------------------------------------------- tablas
 create table if not exists public.cabeceras (
