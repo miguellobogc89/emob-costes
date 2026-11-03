@@ -658,18 +658,6 @@ async function cargarHistorialAna() {
     COMP = null; COMP_FRESCO = null; cargarHistorialAna(); seguro(datosComp).then((d) => d && pintarAnaEstado(d)); toast('Analítico borrado');
   });
 }
-/** Guarda el inventario nº de serie → CUPS (sustituye al anterior) y empareja los puntos de evOS. */
-async function guardarCruce(nombre, datos, log) {
-  const r = leerCruce(nombre, datos);
-  const [c] = await SB.insert('cruce_cargas', [{ archivo: nombre.split('/').pop(), filas: r.filas.length, sin_cups: r.sinCups }], { query: { select: 'id' } });
-  try {
-    for (let i = 0; i < r.filas.length; i += 1000) await SB.insert('cruce_puntos', r.filas.slice(i, i + 1000).map((f) => ({ ...f, carga_id: c.id })), { prefer: 'return=minimal' });
-  } catch (e) { await SB.rest('DELETE', 'cruce_cargas', { query: { id: 'eq.' + c.id } }).catch(() => {}); throw e; }
-  const x = await SB.rpc('cruce_aplicar', { p_carga: c.id });
-  log(`✔ ${nombre}: cruce con ${fN(r.filas.length)} puntos (${fN(r.sinCups)} sin CUPS). Puntos de evOS emparejados: ${fN(x.exacto)} por nº de serie y ${fN(x.recuperado)} recuperados de nº de serie estropeados${x.sin_cups ? ` · ${fN(x.sin_cups)} están en el cruce pero sin CUPS` : ''}.`);
-  CRUCE = null;
-}
-
 /** Guarda un Excel del analítico del equipo (desde la carga única). */
 async function guardarAnalitico(nombre, datos, log) {
   const r = leerAnalitico(datos);
@@ -817,9 +805,9 @@ async function procesar() {
   const lineas = []; const log = (l) => { lineas.push(l); $('#resLog').textContent = lineas.join('\n'); $('#resLog').scrollTop = 1e9; };
   $('#resCarga').classList.remove('hide'); $('#resKpis').innerHTML = ''; $('#resLog').textContent = '';
   const tot = { leidas: 0, dup: 0, nuevas: 0, guardadas: 0 };
-  const cuenta = { facturas: 0, evos: 0, analitico: 0, cruce: 0, error: 0, otros: 0 };
+  const cuenta = { facturas: 0, evos: 0, analitico: 0, error: 0, otros: 0 };
   const pintarKpis = () => { $('#resKpis').innerHTML = (cuenta.facturas ? [['Filas de facturas leídas', tot.leidas], ['Duplicadas en la carga', tot.dup], ['Ya existentes', tot.guardadas - tot.nuevas], ['Facturas: filas nuevas', tot.nuevas]] : [])
-    .concat([['Ficheros de evOS', cuenta.evos], ['Analíticos', cuenta.analitico], ['Cruce nº serie → CUPS', cuenta.cruce]].filter(([, v]) => v))
+    .concat([['Ficheros de evOS', cuenta.evos], ['Analíticos', cuenta.analitico]].filter(([, v]) => v))
     .map(([k, v]) => `<div><b>${fN(v)}</b><span>${k}</span></div>`).join(''); };
   const cola = [...COLA];
   let carga = null; const nombresFact = [];
@@ -836,12 +824,12 @@ async function procesar() {
         if (vistosF.has(h)) { log(`↷ ${e.nombre}: idéntico a ${vistosF.get(h)}, se omite`); continue; }
         vistosF.set(h, e.nombre);
         const tipo = tipoFichero(e.nombre, e.datos);
+        if (tipo === 'cruce') { cuenta.otros++; log(`⚠ ${e.nombre}: es un inventario de puntos de recarga (nº de serie → CUPS); el maestro de puntos no se actualiza desde aquí, se omite`); continue; }
         if (!tipo) { cuenta.otros++; log(`⚠ ${e.nombre}: no es un fichero reconocido (facturas de Endesa, evOS o analítico del equipo), se omite`); continue; }
         if (tipo !== 'facturas') {
           // evOS y analítico: un error en uno no detiene el resto de la carga
           try {
             if (tipo === 'evos') await guardarEvos(e, log, (f, t) => progreso(base + f * ancho, `${etiqueta} · ${t}`));
-            else if (tipo === 'cruce') await guardarCruce(e.nombre, e.datos, log);
             else await guardarAnalitico(e.nombre, e.datos, log);
             cuenta[tipo]++;
           } catch (err) {
@@ -883,12 +871,12 @@ async function procesar() {
       if (tot.guardadas - tot.nuevas) log(`↷ ${fN(tot.guardadas - tot.nuevas)} filas ya estaban guardadas de cargas anteriores, se omiten`);
       log(`＋ ${fN(tot.nuevas)} filas nuevas de facturas guardadas`);
     }
-    if (cuenta.evos && !cuenta.cruce) {
+    if (cuenta.evos) {
       progreso(99, 'Emparejando los puntos de evOS con sus CUPS…');
       const rc = await SB.rpc('refrescar_cruce');
       if (rc?.puntos) log(`⇄ Puntos de evOS con CUPS según el cruce: ${fN(rc.exacto + rc.recuperado)} (${fN(rc.recuperado)} recuperados de nº de serie estropeados)`);
     }
-    const res = [cuenta.facturas && `${cuenta.facturas} de facturas`, cuenta.cruce && 'cruce nº serie → CUPS', cuenta.evos && `${cuenta.evos} de evOS`, cuenta.analitico && `${cuenta.analitico} analítico(s)`].filter(Boolean).join(' · ');
+    const res = [cuenta.facturas && `${cuenta.facturas} de facturas`, cuenta.evos && `${cuenta.evos} de evOS`, cuenta.analitico && `${cuenta.analitico} analítico(s)`].filter(Boolean).join(' · ');
     log(`— Resumen: ${res || 'ningún fichero guardado'}${cuenta.error ? ` · ${cuenta.error} con error (ver arriba)` : ''}${cuenta.otros ? ` · ${cuenta.otros} no reconocido(s)` : ''}`);
     progreso(100, cuenta.error ? 'Carga terminada con avisos: revisa los ficheros marcados con ✖.' : 'Carga completada'); pintarKpis();
     COLA = []; pintarCola();
@@ -991,13 +979,13 @@ function mesesGenerales(d) {
 function pintarCobertura(d, meses) {
   const c = conCruce(d) ? CRUCE : null;
   if (!c) {
-    $('#gCups').textContent = '—'; $('#gCupsSub').textContent = 'falta el fichero de cruce';
+    $('#gCups').textContent = '—'; $('#gCupsSub').textContent = 'falta el maestro de puntos de recarga';
     $('#cobCruce').textContent = '';
-    $('#lsCob').innerHTML = '<p class="muted">Sube el fichero de cruce (nº de serie → CUPS) en «Cargar datos» para comparar solo los CUPS que factura Endesa y tienen puntos en evOS. Mientras tanto se compara todo evOS con todas las facturas.</p>';
-    $('#tbCupsTop').innerHTML = '<tbody><tr><td class="muted">Hace falta el fichero de cruce.</td></tr></tbody>';
+    $('#lsCob').innerHTML = '<p class="muted">Falta el maestro de puntos de recarga con su CUPS para comparar solo los CUPS que factura Endesa y tienen puntos en evOS. Mientras tanto se compara todo evOS con todas las facturas.</p>';
+    $('#tbCupsTop').innerHTML = '<tbody><tr><td class="muted">Falta el maestro de puntos de recarga con su CUPS.</td></tr></tbody>';
     return;
   }
-  $('#cobCruce').textContent = `${c.cruce.archivo} · ${fN(c.n.per)} CUPS en el perímetro`;
+  $('#cobCruce').textContent = `${fN(c.cruce.con_cups)} puntos con CUPS en el maestro · ${fN(c.n.per)} CUPS en el perímetro`;
   $('#gCups').textContent = fN(c.n.per);
   $('#gCupsSub').textContent = `de ${fN(c.n.fcups)} CUPS facturados · ${fN(c.n.ecups)} con puntos en evOS`;
   const comp = meses.filter((m) => m.comparable);
@@ -1008,7 +996,7 @@ function pintarCobertura(d, meses) {
     `<h4 class="mini-h">Energía entregada (evOS)</h4>` +
     fila('En CUPS facturados', Ep, Et, '', Er ? `${fN(Er / 1000, 0)} MWh por nº de serie recuperado` : '') +
     fila('CUPS que no factura Endesa', En, Et, 'fuera', 'otra comercializadora o distribuidora') +
-    fila('Sin CUPS en el cruce', Es, Et, 'fuera', 'nº de serie no está o no tiene CUPS') +
+    fila('Sin CUPS en el maestro', Es, Et, 'fuera', 'nº de serie no está o no tiene CUPS') +
     `<h4 class="mini-h">Energía facturada</h4>` +
     fila('CUPS con puntos en evOS', Fp, Ft) +
     fila('CUPS sin puntos en evOS', Ft - Fp, Ft, 'fuera', 'p. ej. consumos que no son de recarga');
@@ -1204,7 +1192,7 @@ async function cargarCruceTabla() {
   pintarSelMes(CRUCE && CRUCE.anio === c?.anio ? CRUCE : c);
   tb.classList.remove('loading');
   if (!c) return;
-  if (!c.cruce) { tb.innerHTML = '<tbody><tr><td class="muted">Sube el fichero de cruce (nº de serie → CUPS) en «Cargar datos».</td></tr></tbody>'; $('#xTotal').textContent = ''; return; }
+  if (!c.cruce) { tb.innerHTML = '<tbody><tr><td class="muted">Falta el maestro de puntos de recarga con su CUPS.</td></tr></tbody>'; $('#xTotal').textContent = ''; return; }
   const filas = filasCruce(c);
   tb.innerHTML = `<thead><tr>${X_COLS.map(([k, t, n]) => `<th data-c="${k}" class="${n && n !== 'w' ? 'num' : ''}">${t}${ST.x.orden === k ? `<span class="ar">${ST.x.dir === 'desc' ? '↓' : '↑'}</span>` : ''}</th>`).join('')}</tr></thead><tbody>` +
     (filas.length ? filas.slice(0, 1000).map((f) => `<tr>${X_COLS.map(([k, , n]) => {
@@ -1268,7 +1256,7 @@ async function abrirDetalle(cups20, mes) {
       <td class="wrap">${esc(p.direccion || '')}<br><span class="muted sm">${esc([p.cp, p.ciudad].filter(Boolean).join(' '))}</span></td><td>${esc(p.ac_dc || '')}${p.potencia ? ` · ${fN(p.potencia)} kW` : ''}</td>
       <td class="num">${fN(p.sesiones)}</td><td class="num"><b>${fN(p.kwh)}</b></td><td class="num">${fN(p.horas, 1)}</td></tr>`).join('')
       : '<tr><td colspan="6" class="muted">Ningún punto de este CUPS tiene sesiones en evOS este mes.</td></tr>') + `</tbody></table></div>` +
-    (d.puntos_sin_sesiones.length ? `<p class="note">Puntos de este CUPS en el cruce <b>sin sesiones</b> en evOS este mes: ${d.puntos_sin_sesiones.map(esc).join(', ')}. Si estuvieron funcionando, puede que evOS los tenga con otro nº de serie.</p>` : '') +
+    (d.puntos_sin_sesiones.length ? `<p class="note">Puntos de este CUPS en el maestro <b>sin sesiones</b> en evOS este mes: ${d.puntos_sin_sesiones.map(esc).join(', ')}. Si estuvieron funcionando, puede que evOS los tenga con otro nº de serie.</p>` : '') +
     `<p class="note">Cada factura se reparte entre los días de su periodo: «kWh en el mes» es la parte que corresponde a ${MESES[m - 1].toLowerCase()}. Las facturas sustituidas o excluidas aparecen en gris y no cuentan.</p>`;
 }
 function cerrarDetalle() { const dw = $('#drawer'); dw.classList.add('hide'); dw.setAttribute('aria-hidden', 'true'); abrirDetalle.actual = null; }
@@ -1276,7 +1264,7 @@ function cerrarDetalle() { const dw = $('#drawer'); dw.classList.add('hide'); dw
 // --- tabla de puntos de recarga (evOS)
 const U_COLS = [
   ['serial', 'Nº serie'], ['direccion', 'Dirección', 'w'], ['cp', 'CP'], ['ciudad', 'Ciudad'], ['provincia', 'Provincia'], ['region', 'Comunidad'],
-  ['ac_dc', 'AC/DC'], ['potencia', 'Potencia kW', 'n'], ['cups20', 'CUPS'], ['facturado', 'CUPS facturado', 'b'], ['meses', 'Meses activos', 'n'],
+  ['ac_dc', 'AC/DC'], ['potencia', 'Potencia kW', 'n'], ['cups20', 'CUPS'], ['facturado', 'CUPS facturado', 'b'], ['categoria', 'Categoría'], ['cuenta', 'Cuenta'], ['estado_activo', 'Estado'], ['meses', 'Meses activos', 'n'],
   ['sesiones', 'Sesiones', 'n'], ['kwh', 'kWh', 'n2'], ['kwh_ses', 'kWh/sesión', 'n1'], ['horas', 'Horas de carga', 'n1'],
   ['primera', 'Primera sesión', 't'], ['ultima', 'Última sesión', 't'],
 ];
@@ -1293,7 +1281,7 @@ async function datosPuntosEv() {
 }
 function puntosEvFiltrados(todos) {
   const q = $('#uQ').value.trim().toLowerCase();
-  const r = q ? todos.filter((p) => ['serial', 'direccion', 'cp', 'ciudad', 'provincia', 'region'].some((k) => String(p[k] ?? '').toLowerCase().includes(q))) : [...todos];
+  const r = q ? todos.filter((p) => ['serial', 'direccion', 'cp', 'ciudad', 'provincia', 'region', 'cups20', 'cuenta'].some((k) => String(p[k] ?? '').toLowerCase().includes(q))) : [...todos];
   const k = ST.u.orden, s = ST.u.dir === 'asc' ? 1 : -1;
   r.sort((a, b) => (a[k] == null) - (b[k] == null) || (typeof a[k] === 'string' ? String(a[k]).localeCompare(b[k]) : a[k] - b[k]) * s);
   return r;
@@ -1310,7 +1298,7 @@ async function cargarPuntosEv() {
       const v = f[k];
       if (k === 'kwh') return `<td class="num"><span class="inbar" style="width:${Math.max(0, (v / max) * 60)}px"></span>${fN(v)}</td>`;
       if (k === 'cups20') return v ? `<td class="cups">${esc(v)}${f.metodo === 'recuperado' ? ' <span class="tag sust" title="Nº de serie estropeado en evOS: emparejado por número aproximado y código postal">recuperado</span>' : ''}</td>`
-        : `<td class="muted sm">${f.metodo === 'sin_cups' ? 'sin CUPS en el cruce' : 'no está en el cruce'}</td>`;
+        : `<td class="muted sm">${f.metodo === 'sin_cups' ? 'sin CUPS en el maestro' : 'no está en el maestro'}</td>`;
       if (n === 'b') return `<td>${f.cups20 ? (v ? 'Sí' : '<span class="tag exc">No</span>') : ''}</td>`;
       if (n === 'w') return `<td class="wrap">${esc(v)}</td>`;
       if (n === 'n') return `<td class="num">${fN(v)}</td>`;
@@ -1337,14 +1325,15 @@ function cargarDatosCargar() {
   seguro(datosComp).then((d) => d && pintarAnaEstado(d));
 }
 async function cargarEstadoCruce() {
-  const [c, e] = await Promise.all([
-    seguro(() => SB.select('cruce_cargas', { select: '*', order: 'id.desc', limit: 1 })),
+  const [t, c, e] = await Promise.all([
+    seguro(() => SB.select('puntos_recarga', { select: 'serial', limit: 1 }, { count: true })),
+    seguro(() => SB.select('puntos_recarga', { select: 'serial', cups20: 'not.is.null', limit: 1 }, { count: true })),
     seguro(() => SB.todo((limit, offset) => SB.select('evos_cups', { select: 'metodo', limit, offset }))),
   ]);
-  if (!c) return;
-  if (!c.length) { $('#cruceEstado').innerHTML = 'Aún no se ha subido el fichero de cruce.'; return; }
+  if (!t) return;
+  if (!t.total) { $('#cruceEstado').innerHTML = 'El maestro de puntos de recarga está vacío.'; return; }
   const n = (m) => (e || []).filter((x) => x.metodo === m).length;
-  $('#cruceEstado').innerHTML = `<b>${esc(c[0].archivo)}</b> · ${fN(c[0].filas)} puntos (${fN(c[0].sin_cups)} sin CUPS)<br><span class="sm">subido el ${fFechaHora(c[0].fecha)}${c[0].usuario_email ? ' por ' + esc(c[0].usuario_email) : ''}</span>` +
+  $('#cruceEstado').innerHTML = `<b>${fN(t.total)}</b> puntos (${fN(c?.total)} con CUPS)` +
     `<br>Puntos de evOS con CUPS: <b>${fN(n('exacto') + n('recuperado'))}</b> (${fN(n('recuperado'))} recuperados)`;
 }
 async function cargarLotesEvos() {
@@ -1381,7 +1370,7 @@ const TABS = {
   cups: 'Consumo y coste agregados por CUPS (un CUPS puede agrupar varios puntos de recarga)',
   evos: 'Sesiones de evOS sumadas por mes y punto de carga',
   puntos: 'Puntos de recarga según evOS (por número de serie)',
-  cruce: 'Facturado frente a entregado, CUPS a CUPS (según el fichero de cruce)',
+  cruce: 'Facturado frente a entregado, CUPS a CUPS (según el maestro de puntos de recarga)',
   analitico: 'Facturas frente al analítico que monta el equipo',
 };
 // enlaces antiguos -> nueva estructura

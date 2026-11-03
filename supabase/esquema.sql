@@ -661,6 +661,14 @@ begin
                              / (p.d1 - p.d0 + 1) w) w
   where f.cuenta and f.fecha_hasta is not null and (v_min is null or extract(year from m.m) >= v_min)
   group by 1, 2, 3;
+  insert into public.cups (cups20, cups, direccion, distribuidora, tarifa, tension, primera_factura, ultima_factura, actualizado)
+  select distinct on (left(cups, 20)) left(cups, 20), cups, direccion, distribuidora, tarifa, tension,
+         min(fecha_desde) over (partition by left(cups, 20)), max(fecha_hasta) over (partition by left(cups, 20)), now()
+  from pg_temp._cache_src where cups is not null
+  order by left(cups, 20), fecha_hasta desc nulls last
+  on conflict (cups20) do update set cups = excluded.cups, direccion = excluded.direccion, distribuidora = excluded.distribuidora,
+    tarifa = excluded.tarifa, tension = excluded.tension, primera_factura = excluded.primera_factura,
+    ultima_factura = excluded.ultima_factura, actualizado = excluded.actualizado;
   delete from public.cache_prorr_cups where true;
   insert into public.cache_prorr_cups (anio, mes, cups20, kwh, neto)
   select extract(year from m.m)::int, extract(month from m.m)::int, left(f.cups, 20), sum(f.kwh * w.w), sum(f.imp_neto * w.w)
@@ -1035,8 +1043,10 @@ returns jsonb language sql stable as $$
            sum(a.sesiones) sesiones, round(sum(a.kwh), 3) kwh, round(sum(a.importe), 2) importe,
            round(sum(a.segundos) / 3600.0, 1) horas, min(a.primera) primera, max(a.ultima) ultima,
            max(e.cups20) cups20, max(e.metodo) metodo,
+           max(pr.categoria) categoria, max(pr.cuenta) cuenta, max(pr.estado) estado_activo,
            exists (select 1 from public.cache_prorr_cups f where f.anio = p_anio and f.cups20 = max(e.cups20) and f.kwh <> 0) facturado
     from public.evos_agg a left join public.evos_cups e on e.punto = a.punto
+    left join public.puntos_recarga pr on pr.serial = e.serial_cruce
     where a.anio = p_anio group by a.punto) p;
 $$;
 grant execute on function public.evos_preparar(date[]), public.evos_dashboard(int), public.evos_puntos(int) to authenticated;
@@ -1044,34 +1054,33 @@ revoke execute on function public.evos_preparar(date[]), public.evos_dashboard(i
 
 
 -- ---------------------------------------------------------------- cruce nº de serie → CUPS
--- Inventario de activos: cada carga sustituye a la anterior.
-create table if not exists public.cruce_cargas (
-  id bigint generated always as identity primary key, archivo text, filas int, sin_cups int,
-  fecha timestamptz not null default now(), usuario_email text default (auth.jwt() ->> 'email'));
-create table if not exists public.cruce_puntos (
-  carga_id bigint not null references public.cruce_cargas(id) on delete cascade,
-  serial text, cups text, cups20 text, id_activo text, nombre text, cuenta text, segmento text, modelo text,
-  direccion text, cp text, provincia text, alta date, estado text);
-create index if not exists cruce_puntos_serial_idx on public.cruce_puntos (serial);
-create index if not exists cruce_puntos_cups_idx on public.cruce_puntos (cups20);
--- punto de evOS -> CUPS (se recalcula al subir evOS o el cruce)
+-- Maestros (la relación nº de serie → CUPS es estática: se va completando y se queda guardada)
+--   puntos_recarga: un registro por nº de serie, con su CUPS cuando se conoce
+--   cups:           un registro por CUPS (20 primeros caracteres), con lo que sabemos de las facturas
+create table if not exists public.puntos_recarga (
+  serial text primary key, cups text, cups20 text, nombre text, oportunidad text, cuenta text, segmento text, categoria text,
+  modelo text, direccion text, cp text, provincia text, alta date, estado text, fuente text,
+  actualizado timestamptz not null default now());
+create index if not exists puntos_recarga_cups_idx on public.puntos_recarga (cups20);
+create index if not exists puntos_recarga_cp_idx on public.puntos_recarga (cp);
+create table if not exists public.cups (
+  cups20 text primary key, cups text, direccion text, distribuidora text, tarifa text, tension text,
+  primera_factura date, ultima_factura date, actualizado timestamptz not null default now());
+-- punto de evOS -> CUPS (se recalcula al subir evOS)
 create table if not exists public.evos_cups (punto text primary key, serial_cruce text, cups20 text, metodo text);
-alter table public.cruce_cargas enable row level security;
-alter table public.cruce_puntos enable row level security;
+alter table public.puntos_recarga enable row level security;
+alter table public.cups enable row level security;
 alter table public.evos_cups enable row level security;
-drop policy if exists cc_leer on public.cruce_cargas; drop policy if exists cc_ins on public.cruce_cargas; drop policy if exists cc_del on public.cruce_cargas;
-drop policy if exists cpu_leer on public.cruce_puntos; drop policy if exists cpu_ins on public.cruce_puntos;
-drop policy if exists ec_leer on public.evos_cups;
-create policy cc_leer on public.cruce_cargas for select to authenticated using (true);
-create policy cc_ins  on public.cruce_cargas for insert to authenticated with check (true);
-create policy cc_del  on public.cruce_cargas for delete to authenticated using (public.es_admin());
-create policy cpu_leer on public.cruce_puntos for select to authenticated using (true);
-create policy cpu_ins  on public.cruce_puntos for insert to authenticated with check (true);
+drop policy if exists pr_leer on public.puntos_recarga; drop policy if exists cu_leer on public.cups; drop policy if exists ec_leer on public.evos_cups;
+create policy pr_leer on public.puntos_recarga for select to authenticated using (true);
+create policy cu_leer on public.cups for select to authenticated using (true);
 create policy ec_leer on public.evos_cups for select to authenticated using (true);
-revoke all on public.cruce_cargas, public.cruce_puntos, public.evos_cups from anon;
-grant select, insert, delete on public.cruce_cargas to authenticated;
-grant select, insert on public.cruce_puntos to authenticated;
-grant select on public.evos_cups to authenticated;
+revoke all on public.puntos_recarga, public.cups, public.evos_cups from anon;
+grant select on public.puntos_recarga, public.cups, public.evos_cups to authenticated;
+-- la primera versión del cruce guardaba el inventario completo en cada carga: ya no hace falta
+drop function if exists public.cruce_aplicar(bigint);
+drop table if exists public.cruce_puntos;
+drop table if exists public.cruce_cargas;
 
 -- Empareja los puntos de evOS con el inventario:
 --  1) nº de serie idéntico;
@@ -1079,15 +1088,12 @@ grant select on public.evos_cups to authenticated;
 --     siempre que todos los candidatos tengan el mismo CUPS.
 create or replace function public.refrescar_cruce()
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare v_c bigint := (select max(id) from public.cruce_cargas);
 begin
   delete from public.evos_cups where true;
-  if v_c is null then return jsonb_build_object('puntos', 0); end if;
   insert into public.evos_cups (punto, serial_cruce, cups20, metodo)
   select p.punto, c.serial, c.cups20, case when c.cups20 is null then 'sin_cups' else 'exacto' end
   from (select punto, max(serial) serial from public.evos_agg group by punto) p
-  join lateral (select serial, cups20 from public.cruce_puntos
-                where carga_id = v_c and serial = p.serial order by cups20 nulls last limit 1) c on true;
+  join public.puntos_recarga c on c.serial = p.serial;
   insert into public.evos_cups (punto, serial_cruce, cups20, metodo)
   select p.punto, m.serial, m.cs[1], 'recuperado'
   from (select punto, max(serial) serial, max(cp) cp from public.evos_agg
@@ -1097,23 +1103,14 @@ begin
   cross join lateral (select y.mant::numeric * power(10::numeric, y.ex) v,
                              power(10::numeric, y.ex - (length(replace(y.mant, '.', '')) - 1)) / 2 tol) z
   join lateral (select array_agg(distinct c.cups20) cs, min(c.serial) serial
-                from public.cruce_puntos c
-                where c.carga_id = v_c and c.cups20 is not null and c.cp = p.cp and c.serial ~ '^\d{10,}$'
+                from public.puntos_recarga c
+                where c.cups20 is not null and c.cp = p.cp and c.serial ~ '^\d{10,}$'
                   and abs(c.serial::numeric - z.v) <= z.tol) m on array_length(m.cs, 1) = 1
   where not exists (select 1 from public.evos_cups e where e.punto = p.punto);
   return (select jsonb_build_object('puntos', count(*), 'exacto', count(*) filter (where metodo = 'exacto'),
                                     'recuperado', count(*) filter (where metodo = 'recuperado'),
                                     'sin_cups', count(*) filter (where metodo = 'sin_cups'))
           from public.evos_cups);
-end;
-$$;
-
--- Tras subir un inventario: borra los anteriores y recalcula el emparejamiento
-create or replace function public.cruce_aplicar(p_carga bigint)
-returns jsonb language plpgsql security definer set search_path = public as $$
-begin
-  delete from public.cruce_cargas where id <> p_carga;
-  return public.refrescar_cruce();
 end;
 $$;
 
@@ -1153,7 +1150,8 @@ returns jsonb language sql stable security definer set search_path = public as $
               left join pts t using (cups20) left join dirs d using (cups20))
   select jsonb_build_object(
     'anio', p_anio,
-    'cruce', (select jsonb_build_object('archivo', archivo, 'fecha', fecha, 'filas', filas) from public.cruce_cargas order by id desc limit 1),
+    'cruce', (select case when count(*) > 0 then jsonb_build_object('puntos', count(*), 'con_cups', count(cups20), 'actualizado', max(actualizado)) end
+              from public.puntos_recarga),
     'comparables', (select coalesce(jsonb_agg(mes order by mes), '[]') from comp),
     'mes', p_mes,
     'dias_mes', (select dias from dias where mes = p_mes),
@@ -1203,14 +1201,14 @@ returns jsonb language sql stable security definer set search_path = public as $
                sum(a.sesiones) sesiones, round(sum(a.kwh), 1) kwh, round(sum(a.segundos) / 3600.0, 1) horas
         from public.evos_cups e join public.evos_agg a on a.punto = e.punto and a.anio = p_anio and a.mes = p_mes
         where e.cups20 = p_cups20 group by a.punto) p),
-    'puntos_sin_sesiones', (select coalesce(jsonb_agg(c.serial order by c.serial), '[]') from public.cruce_puntos c
-        where c.cups20 = p_cups20 and c.carga_id = (select max(id) from public.cruce_cargas)
+    'puntos_sin_sesiones', (select coalesce(jsonb_agg(c.serial order by c.serial), '[]') from public.puntos_recarga c
+        where c.cups20 = p_cups20
           and not exists (select 1 from public.evos_cups e join public.evos_agg a on a.punto = e.punto and a.anio = p_anio and a.mes = p_mes
                           where e.cups20 = p_cups20 and e.serial_cruce = c.serial))
   );
 $$;
-grant execute on function public.refrescar_cruce(), public.cruce_aplicar(bigint), public.cruce_resumen(int, int), public.cruce_detalle(int, int, text) to authenticated;
-revoke execute on function public.refrescar_cruce(), public.cruce_aplicar(bigint), public.cruce_resumen(int, int), public.cruce_detalle(int, int, text) from anon, public;
+grant execute on function public.refrescar_cruce(), public.cruce_resumen(int, int), public.cruce_detalle(int, int, text) to authenticated;
+revoke execute on function public.refrescar_cruce(), public.cruce_resumen(int, int), public.cruce_detalle(int, int, text) from anon, public;
 
 -- ---------------------------------------------------------------- ajustes finales
 -- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)

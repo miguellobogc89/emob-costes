@@ -353,32 +353,3 @@ async function leerEvos(nombre, datos, log) {
       (dup ? ` · ${dup} sesiones repetidas omitidas` : '') + (malas ? ` · ${malas} filas sin fecha o energía` : ''));
   return { nombre, sesiones: n, kwh: kwhT, importe: impT, dias: listaDias, agg: [...agg.values()].map(redondea), porDia: [...dias.values()].map(redondea) };
 }
-
-// ---------------------------------------------------------------- cruce nº de serie → CUPS
-/** Lee el inventario de activos (nº de serie, CUPS, dirección…). */
-function leerCruce(nombre, datos) {
-  const wb = libro(datos);
-  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
-  const H = aoa[0].map(norm);
-  const col = (...ns) => { for (const n of ns) { const i = H.findIndex((h) => h === norm(n) || h.endsWith(': ' + norm(n))); if (i >= 0) return i; } return -1; };
-  const c = {
-    serial: col('Número de serie'), cups: H.findIndex((h) => h.includes('CUPS')), id: col('Id. del activo'), nombre: col('Nombre de activo'),
-    cuenta: col('Cuenta: Nombre de la cuenta', 'Nombre de la cuenta'), segmento: col('Segmento'), modelo: col('Modelo'),
-    dir: col('Dirección: Address Name', 'Address Name'), prov: col('Dirección: Provincia', 'Provincia'), alta: col('Fecha de activación'), estado: col('Estado'),
-  };
-  if (c.serial < 0 || c.cups < 0) throw new Error('no encuentro las columnas «Número de serie» y «CUPS»');
-  const t = (r, i) => (i >= 0 ? String(r[i] ?? '').trim() : '');
-  const filas = []; let sinCups = 0;
-  for (const r of aoa.slice(1)) {
-    const serial = t(r, c.serial); if (!serial) continue;
-    let cups = t(r, c.cups).toUpperCase().replace(/\s/g, '');
-    if (!/^ES\d{16}[A-Z]{2}/.test(cups)) { cups = ''; sinCups++; }
-    const dir = t(r, c.dir);
-    const cp = (dir.split(',').map((x) => x.trim()).find((x) => /^\d{4,5}$/.test(x)) || '').padStart(5, '0').replace(/^0{5}$/, '');
-    filas.push({ serial, cups: cups || null, cups20: cups ? cups.slice(0, 20) : null, id_activo: t(r, c.id) || null, nombre: t(r, c.nombre) || null,
-      cuenta: t(r, c.cuenta) || null, segmento: t(r, c.segmento) || null, modelo: t(r, c.modelo) || null, direccion: dir || null, cp: cp || null,
-      provincia: t(r, c.prov) || null, alta: aFechaISO(t(r, c.alta)), estado: t(r, c.estado) || null });
-  }
-  if (!filas.length) throw new Error('está vacío');
-  return { filas, sinCups };
-}
