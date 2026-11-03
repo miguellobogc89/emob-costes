@@ -27,16 +27,29 @@ async function recolectar(archivos, log) {
   return out;
 }
 
-/** Qué es un fichero: 'facturas' (Endesa), 'evos' (sesiones) o 'analitico' (Excel del equipo). null si no se reconoce. */
+/** Algunos .xls son en realidad una tabla HTML (exportaciones de Salesforce): se leen como texto en su codificación. */
+function libro(datos, opts = {}) {
+  const b = new Uint8Array(datos);
+  const ini = new TextDecoder('latin1').decode(b.slice(0, 64)).trimStart().toLowerCase();
+  if (ini.startsWith('<')) {
+    let t = new TextDecoder('utf-8').decode(b);
+    if (t.includes('\uFFFD')) t = new TextDecoder('windows-1252').decode(b);
+    return XLSX.read(t, { type: 'string', raw: true, ...opts });
+  }
+  return XLSX.read(datos, { type: 'array', cellDates: false, ...opts });
+}
+
+/** Qué es un fichero: 'facturas' (Endesa), 'evos' (sesiones), 'analitico' (Excel del equipo) o 'cruce' (nº de serie → CUPS). null si no se reconoce. */
 function tipoFichero(nombre, datos) {
   if (/\.csv$/i.test(nombre)) return 'evos';
   let wb;
-  try { wb = XLSX.read(datos, { type: 'array', sheetRows: 80, cellDates: false }); } catch { return null; }
+  try { wb = libro(datos, { sheetRows: 80 }); } catch { return null; }
   let ana = false;
   for (const sh of wb.SheetNames) {
     const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sh], { header: 1, raw: true, defval: null, blankrows: false });
     const cab = (aoa[0] || []).map(norm);
     if (cab.includes('ID PSEUDOFACTURA')) return 'facturas';
+    if (cab.includes('NUMERO DE SERIE') && cab.some((c) => c.includes('CUPS'))) return 'cruce';
     if (cab.includes('SESSION ID')) return 'evos';
     if (aoa.some((r) => r && norm(r[0]) === 'BT')) ana = true;
   }
@@ -339,4 +352,33 @@ async function leerEvos(nombre, datos, log) {
   log(`✔ ${nombre}: ${fN(n)} sesiones · ${fN(kwhT)} kWh · del ${fFecha(listaDias[0])} al ${fFecha(listaDias.at(-1))}` +
       (dup ? ` · ${dup} sesiones repetidas omitidas` : '') + (malas ? ` · ${malas} filas sin fecha o energía` : ''));
   return { nombre, sesiones: n, kwh: kwhT, importe: impT, dias: listaDias, agg: [...agg.values()].map(redondea), porDia: [...dias.values()].map(redondea) };
+}
+
+// ---------------------------------------------------------------- cruce nº de serie → CUPS
+/** Lee el inventario de activos (nº de serie, CUPS, dirección…). */
+function leerCruce(nombre, datos) {
+  const wb = libro(datos);
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+  const H = aoa[0].map(norm);
+  const col = (...ns) => { for (const n of ns) { const i = H.findIndex((h) => h === norm(n) || h.endsWith(': ' + norm(n))); if (i >= 0) return i; } return -1; };
+  const c = {
+    serial: col('Número de serie'), cups: H.findIndex((h) => h.includes('CUPS')), id: col('Id. del activo'), nombre: col('Nombre de activo'),
+    cuenta: col('Cuenta: Nombre de la cuenta', 'Nombre de la cuenta'), segmento: col('Segmento'), modelo: col('Modelo'),
+    dir: col('Dirección: Address Name', 'Address Name'), prov: col('Dirección: Provincia', 'Provincia'), alta: col('Fecha de activación'), estado: col('Estado'),
+  };
+  if (c.serial < 0 || c.cups < 0) throw new Error('no encuentro las columnas «Número de serie» y «CUPS»');
+  const t = (r, i) => (i >= 0 ? String(r[i] ?? '').trim() : '');
+  const filas = []; let sinCups = 0;
+  for (const r of aoa.slice(1)) {
+    const serial = t(r, c.serial); if (!serial) continue;
+    let cups = t(r, c.cups).toUpperCase().replace(/\s/g, '');
+    if (!/^ES\d{16}[A-Z]{2}/.test(cups)) { cups = ''; sinCups++; }
+    const dir = t(r, c.dir);
+    const cp = (dir.split(',').map((x) => x.trim()).find((x) => /^\d{4,5}$/.test(x)) || '').padStart(5, '0').replace(/^0{5}$/, '');
+    filas.push({ serial, cups: cups || null, cups20: cups ? cups.slice(0, 20) : null, id_activo: t(r, c.id) || null, nombre: t(r, c.nombre) || null,
+      cuenta: t(r, c.cuenta) || null, segmento: t(r, c.segmento) || null, modelo: t(r, c.modelo) || null, direccion: dir || null, cp: cp || null,
+      provincia: t(r, c.prov) || null, alta: aFechaISO(t(r, c.alta)), estado: t(r, c.estado) || null });
+  }
+  if (!filas.length) throw new Error('está vacío');
+  return { filas, sinCups };
 }

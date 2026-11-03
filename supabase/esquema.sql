@@ -534,6 +534,9 @@ create table if not exists public.cache_mes (
 create index if not exists cache_mes_idx on public.cache_mes (base, anio, tension);
 -- Facturas repartidas por días de su periodo (para comparar mes a mes con evOS)
 create table if not exists public.cache_prorr (anio int, mes int, tension text, kwh numeric, neto numeric, total numeric);
+-- lo mismo por CUPS (20 primeros caracteres: el final del CUPS cambia entre fuentes)
+create table if not exists public.cache_prorr_cups (anio int, mes int, cups20 text, kwh float8, neto float8);
+create index if not exists cache_prorr_cups_idx on public.cache_prorr_cups (anio, cups20);
 create table if not exists public.cache_cups (
   base text not null, anio int, tension text, cups text,
   direccion text, distribuidora text, tarifa text, ult date,
@@ -565,6 +568,11 @@ drop policy if exists cp_leer on public.cache_prorr;
 create policy cp_leer on public.cache_prorr for select to authenticated using (true);
 revoke all on public.cache_prorr from anon;
 grant select on public.cache_prorr to authenticated;
+alter table public.cache_prorr_cups enable row level security;
+drop policy if exists cpc_leer on public.cache_prorr_cups;
+create policy cpc_leer on public.cache_prorr_cups for select to authenticated using (true);
+revoke all on public.cache_prorr_cups from anon;
+grant select on public.cache_prorr_cups to authenticated;
 revoke all on public.cache_mes, public.cache_cups, public.cache_info from anon;
 grant select on public.cache_mes, public.cache_cups, public.cache_info to authenticated;
 
@@ -650,6 +658,17 @@ begin
   cross join lateral (select (least(p.d1, (m.m + interval '1 month')::date - 1) - greatest(p.d0, m.m::date) + 1)::float8
                              / (p.d1 - p.d0 + 1) w) w
   where f.cuenta and f.fecha_hasta is not null and (v_min is null or extract(year from m.m) >= v_min)
+  group by 1, 2, 3;
+  delete from public.cache_prorr_cups where true;
+  insert into public.cache_prorr_cups (anio, mes, cups20, kwh, neto)
+  select extract(year from m.m)::int, extract(month from m.m)::int, left(f.cups, 20), sum(f.kwh * w.w), sum(f.imp_neto * w.w)
+  from pg_temp._cache_src f
+  cross join lateral (select case when f.fecha_desde is not null and f.fecha_hasta - f.fecha_desde between 0 and 400
+                                  then f.fecha_desde else f.fecha_hasta end d0, f.fecha_hasta d1) p
+  cross join lateral generate_series(date_trunc('month', p.d0), date_trunc('month', p.d1), interval '1 month') m(m)
+  cross join lateral (select (least(p.d1, (m.m + interval '1 month')::date - 1) - greatest(p.d0, m.m::date) + 1)::float8
+                             / (p.d1 - p.d0 + 1) w) w
+  where f.cuenta and f.fecha_hasta is not null and f.cups is not null and (v_min is null or extract(year from m.m) >= v_min)
   group by 1, 2, 3;
   drop table if exists pg_temp._cache_src;
 
@@ -1008,15 +1027,143 @@ $$;
 create or replace function public.evos_puntos(p_anio int)
 returns jsonb language sql stable as $$
   select coalesce(jsonb_agg(p order by p.kwh desc), '[]') from (
-    select punto, max(serial) serial, max(direccion) direccion, max(cp) cp, max(ciudad) ciudad, max(provincia) provincia,
-           max(region) region, string_agg(distinct nullif(ac_dc, ''), '/') ac_dc, max(potencia) potencia,
-           string_agg(distinct nullif(cpo, ''), ', ') cpo, count(distinct mes) meses,
-           sum(sesiones) sesiones, round(sum(kwh), 3) kwh, round(sum(importe), 2) importe,
-           round(sum(segundos) / 3600.0, 1) horas, min(primera) primera, max(ultima) ultima
-    from public.evos_agg where anio = p_anio group by punto) p;
+    select a.punto, max(a.serial) serial, max(a.direccion) direccion, max(a.cp) cp, max(a.ciudad) ciudad, max(a.provincia) provincia,
+           max(a.region) region, string_agg(distinct nullif(a.ac_dc, ''), '/') ac_dc, max(a.potencia) potencia,
+           string_agg(distinct nullif(a.cpo, ''), ', ') cpo, count(distinct a.mes) meses,
+           sum(a.sesiones) sesiones, round(sum(a.kwh), 3) kwh, round(sum(a.importe), 2) importe,
+           round(sum(a.segundos) / 3600.0, 1) horas, min(a.primera) primera, max(a.ultima) ultima,
+           max(e.cups20) cups20, max(e.metodo) metodo,
+           exists (select 1 from public.cache_prorr_cups f where f.anio = p_anio and f.cups20 = max(e.cups20) and f.kwh <> 0) facturado
+    from public.evos_agg a left join public.evos_cups e on e.punto = a.punto
+    where a.anio = p_anio group by a.punto) p;
 $$;
 grant execute on function public.evos_preparar(date[]), public.evos_dashboard(int), public.evos_puntos(int) to authenticated;
 revoke execute on function public.evos_preparar(date[]), public.evos_dashboard(int), public.evos_puntos(int) from anon, public;
+
+
+-- ---------------------------------------------------------------- cruce nº de serie → CUPS
+-- Inventario de activos: cada carga sustituye a la anterior.
+create table if not exists public.cruce_cargas (
+  id bigint generated always as identity primary key, archivo text, filas int, sin_cups int,
+  fecha timestamptz not null default now(), usuario_email text default (auth.jwt() ->> 'email'));
+create table if not exists public.cruce_puntos (
+  carga_id bigint not null references public.cruce_cargas(id) on delete cascade,
+  serial text, cups text, cups20 text, id_activo text, nombre text, cuenta text, segmento text, modelo text,
+  direccion text, cp text, provincia text, alta date, estado text);
+create index if not exists cruce_puntos_serial_idx on public.cruce_puntos (serial);
+create index if not exists cruce_puntos_cups_idx on public.cruce_puntos (cups20);
+-- punto de evOS -> CUPS (se recalcula al subir evOS o el cruce)
+create table if not exists public.evos_cups (punto text primary key, serial_cruce text, cups20 text, metodo text);
+alter table public.cruce_cargas enable row level security;
+alter table public.cruce_puntos enable row level security;
+alter table public.evos_cups enable row level security;
+drop policy if exists cc_leer on public.cruce_cargas; drop policy if exists cc_ins on public.cruce_cargas; drop policy if exists cc_del on public.cruce_cargas;
+drop policy if exists cpu_leer on public.cruce_puntos; drop policy if exists cpu_ins on public.cruce_puntos;
+drop policy if exists ec_leer on public.evos_cups;
+create policy cc_leer on public.cruce_cargas for select to authenticated using (true);
+create policy cc_ins  on public.cruce_cargas for insert to authenticated with check (true);
+create policy cc_del  on public.cruce_cargas for delete to authenticated using (public.es_admin());
+create policy cpu_leer on public.cruce_puntos for select to authenticated using (true);
+create policy cpu_ins  on public.cruce_puntos for insert to authenticated with check (true);
+create policy ec_leer on public.evos_cups for select to authenticated using (true);
+revoke all on public.cruce_cargas, public.cruce_puntos, public.evos_cups from anon;
+grant select, insert, delete on public.cruce_cargas to authenticated;
+grant select, insert on public.cruce_puntos to authenticated;
+grant select on public.evos_cups to authenticated;
+
+-- Empareja los puntos de evOS con el inventario:
+--  1) nº de serie idéntico;
+--  2) nº de serie estropeado en notación científica (6,2103E+13): número aproximado + mismo código postal,
+--     siempre que todos los candidatos tengan el mismo CUPS.
+create or replace function public.refrescar_cruce()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_c bigint := (select max(id) from public.cruce_cargas);
+begin
+  delete from public.evos_cups where true;
+  if v_c is null then return jsonb_build_object('puntos', 0); end if;
+  insert into public.evos_cups (punto, serial_cruce, cups20, metodo)
+  select p.punto, c.serial, c.cups20, case when c.cups20 is null then 'sin_cups' else 'exacto' end
+  from (select punto, max(serial) serial from public.evos_agg group by punto) p
+  join lateral (select serial, cups20 from public.cruce_puntos
+                where carga_id = v_c and serial = p.serial order by cups20 nulls last limit 1) c on true;
+  insert into public.evos_cups (punto, serial_cruce, cups20, metodo)
+  select p.punto, m.serial, m.cs[1], 'recuperado'
+  from (select punto, max(serial) serial, max(cp) cp from public.evos_agg
+        where serial ~* '^\d+([.,]\d+)?E\+\d+$' group by punto) p
+  cross join lateral (select split_part(replace(upper(p.serial), ',', '.'), 'E+', 1) mant,
+                             split_part(upper(p.serial), 'E+', 2)::int ex) y
+  cross join lateral (select y.mant::numeric * power(10::numeric, y.ex) v,
+                             power(10::numeric, y.ex - (length(replace(y.mant, '.', '')) - 1)) / 2 tol) z
+  join lateral (select array_agg(distinct c.cups20) cs, min(c.serial) serial
+                from public.cruce_puntos c
+                where c.carga_id = v_c and c.cups20 is not null and c.cp = p.cp and c.serial ~ '^\d{10,}$'
+                  and abs(c.serial::numeric - z.v) <= z.tol) m on array_length(m.cs, 1) = 1
+  where not exists (select 1 from public.evos_cups e where e.punto = p.punto);
+  return (select jsonb_build_object('puntos', count(*), 'exacto', count(*) filter (where metodo = 'exacto'),
+                                    'recuperado', count(*) filter (where metodo = 'recuperado'),
+                                    'sin_cups', count(*) filter (where metodo = 'sin_cups'))
+          from public.evos_cups);
+end;
+$$;
+
+-- Tras subir un inventario: borra los anteriores y recalcula el emparejamiento
+create or replace function public.cruce_aplicar(p_carga bigint)
+returns jsonb language plpgsql security definer set search_path = public as $$
+begin
+  delete from public.cruce_cargas where id <> p_carga;
+  return public.refrescar_cruce();
+end;
+$$;
+
+-- Comparativa del perímetro cruzado: CUPS facturados que tienen puntos de evOS
+create or replace function public.cruce_resumen(p_anio int)
+returns jsonb language sql stable security definer set search_path = public as $$
+  with ev as (   -- evOS por mes y CUPS (null = sin CUPS)
+    select a.mes, e.cups20, e.metodo, sum(a.kwh)::float8 kwh, sum(a.importe)::float8 importe, sum(a.sesiones) sesiones
+    from public.evos_agg a left join public.evos_cups e on e.punto = a.punto
+    where a.anio = p_anio group by 1, 2, 3),
+  fa as (select mes, cups20, kwh, neto from public.cache_prorr_cups where anio = p_anio),
+  fcups as (select cups20 from fa group by 1 having sum(abs(kwh)) > 0),
+  ecups as (select distinct cups20 from ev where cups20 is not null),
+  per as (select cups20 from fcups intersect select cups20 from ecups),
+  dias as (select extract(month from dia)::int mes, count(distinct dia) dias from public.evos_dia
+           where dia >= make_date(p_anio, 1, 1) and dia < make_date(p_anio + 1, 1, 1) group by 1),
+  comp as (select d.mes from dias d
+           where d.dias >= extract(day from (make_date(p_anio, d.mes, 1) + interval '1 month' - interval '1 day'))),
+  fm as (select fa.mes, sum(fa.kwh) f_tot, sum(fa.kwh) filter (where per.cups20 is not null) f_per,
+                sum(fa.neto) filter (where per.cups20 is not null) f_neto_per
+         from fa left join per using (cups20) group by 1),
+  em as (select ev.mes, sum(ev.kwh) e_tot, sum(ev.kwh) filter (where per.cups20 is not null) e_per,
+                sum(ev.importe) filter (where per.cups20 is not null) e_imp_per,
+                sum(ev.kwh) filter (where ev.cups20 is null) e_sin,
+                sum(ev.kwh) filter (where ev.cups20 is not null and fc.cups20 is null) e_nofact,
+                sum(ev.kwh) filter (where ev.metodo = 'recuperado' and per.cups20 is not null) e_rec
+         from ev left join per using (cups20) left join fcups fc using (cups20) group by 1),
+  fc_c as (select cups20, sum(kwh) f_kwh, sum(neto) f_neto from fa where mes in (select mes from comp) group by 1),
+  ev_c as (select cups20, sum(kwh) e_kwh, sum(sesiones) e_ses from ev where mes in (select mes from comp) and cups20 is not null group by 1),
+  pts as (select cups20, count(*) puntos from public.evos_cups where cups20 is not null group by 1),
+  dirs as (select left(cups, 20) cups20, max(cups) cups, max(direccion) direccion from public.cache_cups where anio = p_anio group by 1),
+  porcups as (select p.cups20, f.f_kwh, f.f_neto, e.e_kwh, e.e_ses, coalesce(t.puntos, 0) puntos, d.direccion, d.cups
+              from per p left join fc_c f using (cups20) left join ev_c e using (cups20)
+              left join pts t using (cups20) left join dirs d using (cups20))
+  select jsonb_build_object(
+    'anio', p_anio,
+    'cruce', (select jsonb_build_object('archivo', archivo, 'fecha', fecha, 'filas', filas) from public.cruce_cargas order by id desc limit 1),
+    'comparables', (select coalesce(jsonb_agg(mes order by mes), '[]') from comp),
+    'mensual', (select jsonb_agg(jsonb_build_object('mes', g.mes, 'f_per', fm.f_per, 'f_neto_per', fm.f_neto_per, 'f_tot', fm.f_tot,
+                                                    'e_per', em.e_per, 'e_imp_per', em.e_imp_per, 'e_tot', em.e_tot,
+                                                    'e_sin', em.e_sin, 'e_nofact', em.e_nofact, 'e_rec', em.e_rec) order by g.mes)
+                from generate_series(1, 12) g(mes) left join fm on fm.mes = g.mes left join em on em.mes = g.mes),
+    'n', jsonb_build_object('per', (select count(*) from per), 'fcups', (select count(*) from fcups), 'ecups', (select count(*) from ecups)),
+    'cups', (select coalesce(jsonb_agg(jsonb_build_object(
+        'cups20', c.cups20, 'cups', c.cups, 'direccion', c.direccion, 'puntos', c.puntos,
+        'f_kwh', round(c.f_kwh::numeric, 1), 'f_neto', round(c.f_neto::numeric, 2),
+        'e_kwh', round(c.e_kwh::numeric, 1), 'e_ses', c.e_ses
+      ) order by coalesce(c.f_kwh, 0) - coalesce(c.e_kwh, 0) desc), '[]') from porcups c)
+  );
+$$;
+grant execute on function public.refrescar_cruce(), public.cruce_aplicar(bigint), public.cruce_resumen(int) to authenticated;
+revoke execute on function public.refrescar_cruce(), public.cruce_aplicar(bigint), public.cruce_resumen(int) from anon, public;
 
 -- ---------------------------------------------------------------- ajustes finales
 -- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)

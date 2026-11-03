@@ -311,3 +311,9 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .avisos li.ok { background: #eef8f2; color: var(--ink); }
 .card.pendiente { margin-top: 16px; border-style: dashed; }
 #v-inicio .pane > .kpis, #v-inicio .pane > div > .kpis { margin-top: 0; }
+.cob { display: grid; grid-template-columns: minmax(0, 1.3fr) 1fr 92px; gap: 10px; align-items: center; font-size: 13px; }
+.cob .n small, .cob .v small { display: block; color: var(--mute); font-size: 11px; }
+.cob .t { height: 10px; background: var(--s1-track); border-radius: 99px; overflow: hidden; }
+.cob .f { display: block; height: 100%; background: var(--s1); border-radius: 99px; }
+.cob.fuera .f { background: var(--mute); opacity: .5; }
+.cob .v { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }

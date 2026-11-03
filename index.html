@@ -89,8 +89,8 @@
               <span class="delta" id="gDifPct"></span>
               <span class="muted sm" id="gMeses"></span>
             </div>
-            <div class="card tile"><span class="lbl">Facturado<button class="info" type="button" aria-label="Qué significa" data-info="kWh de todas las facturas (BT + MT), repartidos entre los días de su periodo para que cada mes encaje con evOS. Con las correcciones aplicadas.">i</button></span><b id="gFact">—</b><span class="muted sm">MWh · meses comparables</span></div>
-            <div class="card tile"><span class="lbl">Entregado según evOS<button class="info" type="button" aria-label="Qué significa" data-info="Suma de la energía de las sesiones de carga de evOS en los mismos meses.">i</button></span><b id="gEvos">—</b><span class="muted sm" id="gEvosSub">MWh · meses comparables</span></div>
+            <div class="card tile"><span class="lbl">Facturado<button class="info" type="button" aria-label="Qué significa" data-info="kWh facturados (BT + MT), repartidos entre los días de su periodo para que cada mes encaje con evOS, con las correcciones aplicadas. Con el fichero de cruce cargado, solo los CUPS que tienen puntos de recarga en evOS.">i</button></span><b id="gFact">—</b><span class="muted sm" id="gFactSub">MWh · meses comparables</span></div>
+            <div class="card tile"><span class="lbl">Entregado según evOS<button class="info" type="button" aria-label="Qué significa" data-info="Energía de las sesiones de evOS en los mismos meses. Con el fichero de cruce cargado, solo la de los puntos cuyo CUPS factura Endesa.">i</button></span><b id="gEvos">—</b><span class="muted sm" id="gEvosSub">MWh · meses comparables</span></div>
             <div class="card tile"><span class="lbl">Coste por kWh entregado<button class="info" type="button" aria-label="Qué significa" data-info="Importe facturado sin IVA dividido entre los kWh entregados según evOS: lo que de verdad cuesta cada kWh que llega a un coche. Debajo, el coste por kWh facturado, para comparar.">i</button></span><b id="gCoste">—</b><span class="muted sm" id="gCosteSub"></span></div>
             <div class="card tile"><span class="lbl">Ingreso CPO frente a coste<button class="info" type="button" aria-label="Qué significa" data-info="«Total Amount CPO» de evOS (lo cobrado por las recargas) frente al importe facturado sin IVA, en los meses comparables. Las sesiones de MOE_ES_OCPI vienen a 0 € en evOS.">i</button></span><b id="gIngreso">—</b><span class="muted sm" id="gIngresoSub"></span></div>
           </div>
@@ -116,9 +116,15 @@
               <ul class="avisos" id="lsAvisos"></ul>
             </div>
           </div>
-          <div class="card pendiente">
-            <div class="card-h"><h3>Por CUPS</h3><span class="pill-bt">Pendiente</span></div>
-            <p class="muted">Aquí irán los CUPS con más diferencia entre lo facturado y lo entregado. Hace falta la tabla de equivalencia <b>nº de serie del punto de recarga → CUPS</b>; en cuanto la tengas, la cargamos y se activa.</p>
+          <div class="grid g1-2">
+            <div class="card">
+              <div class="card-h"><h3>Perímetro del cruce<button class="info" type="button" aria-label="Qué significa" data-info="Qué parte de cada lado entra en la comparación. Solo se comparan los CUPS que están facturados Y tienen puntos de evOS asignados en el fichero de cruce (nº de serie → CUPS). Lo demás se deja fuera: puntos de evOS sin CUPS en el cruce, CUPS que no factura Endesa (otra comercializadora o distribuidora) y CUPS facturados sin puntos en evOS.">i</button></h3><span class="muted sm" id="cobCruce"></span></div>
+              <div id="lsCob" class="stack"></div>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>Por CUPS<button class="info" type="button" aria-label="Qué significa" data-info="CUPS con más diferencia entre lo facturado y lo entregado en sus puntos de recarga, en los meses comparables. Positivo: se factura más de lo entregado.">i</button></h3><a href="#tablas/cruce" class="link sm">Ver todos →</a></div>
+              <div class="tbl-wrap"><table class="tbl" id="tbCupsTop"></table></div>
+            </div>
           </div>
         </div>
       </div>
@@ -236,7 +242,7 @@
     <!-- ---------- TABLAS ---------- -->
     <section class="vista hide" id="v-tablas">
       <div class="tabs" id="tabs" role="tablist">
-        <button data-t="bt">Facturas BT</button><button data-t="mt">Facturas MT</button><button data-t="cups">CUPS</button><button data-t="evos">evOS</button><button data-t="puntos">Puntos de recarga</button><button data-t="analitico">Analítico</button>
+        <button data-t="bt">Facturas BT</button><button data-t="mt">Facturas MT</button><button data-t="cups">CUPS</button><button data-t="evos">evOS</button><button data-t="puntos">Puntos de recarga</button><button data-t="cruce">Cruce por CUPS</button><button data-t="analitico">Analítico</button>
       </div>
       <div class="pane" data-p="bt mt">
 
@@ -290,7 +296,19 @@
           <button class="btn" id="uExport">Exportar Excel</button>
         </div>
         <div class="tbl-wrap big"><table class="tbl" id="tbPuntosEv"></table></div>
-        <p class="note">Puntos de carga según evOS, identificados por nº de serie + dirección + código postal (algunos nº de serie vienen estropeados en notación científica). La columna <b>CUPS</b> se rellenará cuando carguemos la tabla de equivalencia nº de serie → CUPS.</p>
+        <p class="note">Puntos de carga según evOS, identificados por nº de serie + dirección + código postal (algunos nº de serie vienen estropeados en notación científica). La columna <b>CUPS</b> sale del fichero de cruce; «recuperado» indica que el nº de serie venía estropeado en evOS y se ha emparejado por número aproximado y código postal. «CUPS facturado: No» son puntos cuya luz no factura Endesa en este año.</p>
+      </div>
+      </div>
+      <div class="pane" data-p="cruce">
+      <div class="card">
+        <div class="toolbar">
+          <input type="search" id="xQ" placeholder="Buscar CUPS o dirección…">
+          <span class="grow"></span>
+          <span class="muted sm" id="xTotal"></span>
+          <button class="btn" id="xExport">Exportar Excel</button>
+        </div>
+        <div class="tbl-wrap big"><table class="tbl" id="tbCruce"></table></div>
+        <p class="note">CUPS facturados que tienen puntos de recarga de evOS asignados en el fichero de cruce. Facturado: kWh de las facturas repartidos por los días de su periodo. Entregado: kWh de las sesiones de evOS en sus puntos. Solo meses que evOS cubre enteros.</p>
       </div>
       </div>
       <div class="pane" data-p="analitico">
@@ -362,7 +380,7 @@
               <label class="btn">Elegir ficheros<input id="inFiles" type="file" multiple accept=".xlsx,.xlsm,.xls,.csv,.zip" hidden></label>
               <label class="btn">Elegir carpeta<input id="inDir" type="file" webkitdirectory directory multiple hidden></label>
             </div>
-            <p class="muted sm">Cada fichero se reconoce solo: <b>facturas agrupadas de Endesa</b>, <b>sesiones de evOS</b> o <b>analítico del equipo</b> («Costes por BT y MT»).</p>
+            <p class="muted sm">Cada fichero se reconoce solo: <b>facturas agrupadas de Endesa</b>, <b>sesiones de evOS</b>, <b>analítico del equipo</b> («Costes por BT y MT») o el <b>inventario de activos</b> con nº de serie y CUPS (cruce).</p>
           </div>
           <ul id="cola"></ul>
           <div class="row end">
@@ -386,6 +404,8 @@
             <div class="kv"><span>Ficheros</span><b id="dEvFich">—</b></div>
             <div class="kv"><span>Sesiones</span><b id="dEvSes">—</b></div>
             <div class="kv"><span>Días cubiertos</span><b id="dEvRango">—</b></div>
+            <h4 class="mini-h">Cruce nº de serie → CUPS</h4>
+            <div id="cruceEstado" class="muted sm">—</div>
             <h4 class="mini-h">Analítico del equipo</h4>
             <div id="anaEstado" class="muted sm">—</div>
             <p class="note">Las filas repetidas de facturas se eliminan siempre. Un fichero de evOS de días ya cargados sustituye al anterior. Un analítico del mismo año sustituye al anterior en la comparativa.</p>
