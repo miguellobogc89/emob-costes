@@ -296,6 +296,10 @@ insert into public.opciones (clave, activa, descripcion) values
   ('copias_agrupadas', true, 'Si una misma pseudofactura aparece en varias facturas agrupadas, solo cuenta la de la agrupada más reciente.'),
   ('consumos_anomalos', true, 'Si una fila trae un consumo (total o por periodo) de más de 1.000.000 kWh, en positivo o negativo (p. ej. vuelta del contador), sus kWh no se cuentan; los importes sí.')
 on conflict (clave) do nothing;
+alter table public.opciones add column if not exists valor text;
+insert into public.opciones (clave, activa, descripcion, valor) values
+  ('anio_minimo', true, 'El dashboard, los CUPS y la comparativa solo muestran desde este año (por mes de consumo o de emisión). Las facturas anteriores siguen guardadas.', '2026')
+on conflict (clave) do nothing;
 alter table public.opciones enable row level security;
 drop policy if exists opc_leer on public.opciones;
 drop policy if exists opc_admin on public.opciones;
@@ -365,7 +369,7 @@ $$;
 
 create or replace function public.tg_opciones()
 returns trigger language plpgsql security definer set search_path = public as $$
-begin perform public.recalcular_sustituidas(); return null; end;
+begin perform public.recalcular_sustituidas(); return null; end;   -- también refresca los resúmenes
 $$;
 drop trigger if exists opciones_cambio on public.opciones;
 create trigger opciones_cambio after update on public.opciones
@@ -559,7 +563,9 @@ grant select on public.cache_mes, public.cache_cups, public.cache_info to authen
 
 create or replace function public.refrescar_cache()
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare t0 timestamptz := clock_timestamp();
+declare
+  t0 timestamptz := clock_timestamp();
+  v_min int := (select case when activa and valor ~ '^\d{4}$' then valor::int end from public.opciones where clave = 'anio_minimo');
 begin
   -- UNA sola lectura de la tabla de facturas (con correcciones y marcas) a una tabla temporal estrecha.
   -- De ahí salen los resúmenes por mes, por CUPS, las direcciones y los contadores generales.
@@ -604,7 +610,7 @@ begin
   from pg_temp._cache_src f
   cross join (values ('consumo'), ('emision')) b(base)
   cross join lateral (select case when b.base = 'emision' then f.fecha_emision else f.fecha_hasta end fecha) x
-  where f.cuenta
+  where f.cuenta and (v_min is null or x.fecha is null or extract(year from x.fecha) >= v_min)
   group by 1, 2, 3, 4, 5, 6;
   insert into public.cache_cups
   select g.base, g.anio, g.tension, g.cups, d.direccion, d.distribuidora, d.tarifa, g.hasta,
@@ -618,7 +624,7 @@ begin
     from pg_temp._cache_src f
     cross join (values ('consumo'), ('emision')) b(base)
     cross join lateral (select case when b.base = 'emision' then f.fecha_emision else f.fecha_hasta end fecha) x
-    where f.cuenta
+    where f.cuenta and (v_min is null or x.fecha is null or extract(year from x.fecha) >= v_min)
     group by 1, 2, 3, 4
   ) g
   left join (select distinct on (cups) cups, direccion, distribuidora, tarifa

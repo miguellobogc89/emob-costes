@@ -702,21 +702,33 @@ async function cargarCorrecciones() {
   });
   sugerirValores();
 }
-const OPC = { refacturaciones: ['Refacturaciones', 'refacturaciones'], copias_agrupadas: ['Copias en varias agrupadas', 'copias'], consumos_anomalos: ['Consumos anómalos', 'anomalos'] };
+const OPC = { anio_minimo: ['Mostrar desde el año', null], refacturaciones: ['Refacturaciones', 'refacturaciones'], copias_agrupadas: ['Copias en varias agrupadas', 'copias'], consumos_anomalos: ['Consumos anómalos', 'anomalos'] };
 async function cargarSustituidas() {
   const r = await seguro(() => SB.rpc('sustituidas_resumen'));
   if (!r) return;
-  $('#lsSust').innerHTML = (r.opciones || []).map((o) => {
+  const orden = Object.keys(OPC);
+  const opciones = [...(r.opciones || [])].sort((a, b) => orden.indexOf(a.clave) - orden.indexOf(b.clave));
+  $('#lsSust').innerHTML = opciones.map((o) => {
     const [titulo, k] = OPC[o.clave] || [o.clave, null]; const c = (k && r[k]) || { facturas: 0, kwh: 0 };
+    if (o.clave === 'anio_minimo') return `<div class="opcion">
+      <label class="sw"><input type="checkbox" class="oAct" data-k="anio_minimo" ${o.activa ? 'checked' : ''} ${ST.admin ? '' : 'disabled'}><span></span></label>
+      <div><b>${esc(titulo)} <input type="number" class="oAnio" min="2000" max="2100" value="${esc(o.valor || '')}" ${ST.admin ? '' : 'disabled'}></b><span class="muted">${esc(o.descripcion || '')}</span></div>
+      <div class="cifra muted">${o.activa ? 'activo' : 'se muestran todos los años'}</div></div>`;
     return `<div class="opcion">
       <label class="sw"><input type="checkbox" class="oAct" data-k="${esc(o.clave)}" ${o.activa ? 'checked' : ''} ${ST.admin ? '' : 'disabled'}><span></span></label>
       <div><b>${esc(titulo)}</b><span class="muted">${esc(o.descripcion || '')}</span></div>
       <div class="cifra"><b>${fN(c.facturas)}</b> facturas<br><span class="muted">${fN(c.kwh)} kWh ${o.clave === 'consumos_anomalos' ? 'ignorados' : 'no contados'}</span></div></div>`;
   }).join('') + `<p class="note">Para revisarlas: en <a href="#facturas">Facturas</a>, filtra por «Sustituidas (no cuentan)»; al pasar el ratón por la etiqueta se ve qué factura la sustituye.</p>`;
+  $$('.oAnio').forEach((inp) => inp.onchange = async () => {
+    if (!/^\d{4}$/.test(inp.value)) return;
+    inp.disabled = true;
+    await seguro(() => SB.update('opciones', { clave: 'eq.anio_minimo' }, { valor: inp.value }));
+    datosCambiados(); await refrescarAnios(); await cargarSustituidas(); toast(`Ahora se muestra desde ${inp.value}`);
+  });
   $$('.oAct').forEach((c) => c.onchange = async () => {
     c.disabled = true;
     await seguro(() => SB.update('opciones', { clave: 'eq.' + c.dataset.k }, { activa: c.checked }));
-    datosCambiados(); await cargarSustituidas(); toast(c.checked ? 'Regla activada y aplicada' : 'Regla desactivada');
+    datosCambiados(); await refrescarAnios(); await cargarSustituidas(); toast(c.checked ? 'Regla activada y aplicada' : 'Regla desactivada');
   });
 }
 async function sugerirValores() {
