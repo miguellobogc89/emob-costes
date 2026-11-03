@@ -1264,7 +1264,7 @@ function cerrarDetalle() { const dw = $('#drawer'); dw.classList.add('hide'); dw
 // --- tabla de puntos de recarga (evOS)
 const U_COLS = [
   ['serial', 'Nº serie'], ['direccion', 'Dirección', 'w'], ['cp', 'CP'], ['ciudad', 'Ciudad'], ['provincia', 'Provincia'], ['region', 'Comunidad'],
-  ['ac_dc', 'AC/DC'], ['potencia', 'Potencia kW', 'n'], ['cups20', 'CUPS'], ['facturado', 'CUPS facturado', 'b'], ['categoria', 'Categoría'], ['cuenta', 'Cuenta'], ['estado_activo', 'Estado'], ['meses', 'Meses activos', 'n'],
+  ['ac_dc', 'AC/DC'], ['potencia', 'Potencia kW', 'n'], ['cups20', 'CUPS'], ['facturado', 'CUPS facturado', 'b'], ['categoria', 'Business Model'], ['tipologia', 'Tipología'], ['cuenta', 'Nombre de la cuenta'], ['estado_activo', 'Estado'], ['meses', 'Meses activos', 'n'],
   ['sesiones', 'Sesiones', 'n'], ['kwh', 'kWh', 'n2'], ['kwh_ses', 'kWh/sesión', 'n1'], ['horas', 'Horas de carga', 'n1'],
   ['primera', 'Primera sesión', 't'], ['ultima', 'Última sesión', 't'],
 ];
@@ -1326,8 +1326,8 @@ function cargarDatosCargar() {
 }
 async function cargarEstadoCruce() {
   const [t, c, e] = await Promise.all([
-    seguro(() => SB.select('puntos_recarga', { select: 'serial', limit: 1 }, { count: true })),
-    seguro(() => SB.select('puntos_recarga', { select: 'serial', cups20: 'not.is.null', limit: 1 }, { count: true })),
+    seguro(() => SB.select('puntos_recarga', { select: 'id_activo', limit: 1 }, { count: true })),
+    seguro(() => SB.select('puntos_recarga', { select: 'id_activo', cups: 'like.ES*', limit: 1 }, { count: true })),
     seguro(() => SB.todo((limit, offset) => SB.select('evos_cups', { select: 'metodo', limit, offset }))),
   ]);
   if (!t) return;

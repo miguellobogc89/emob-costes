@@ -1043,10 +1043,10 @@ returns jsonb language sql stable as $$
            sum(a.sesiones) sesiones, round(sum(a.kwh), 3) kwh, round(sum(a.importe), 2) importe,
            round(sum(a.segundos) / 3600.0, 1) horas, min(a.primera) primera, max(a.ultima) ultima,
            max(e.cups20) cups20, max(e.metodo) metodo,
-           max(pr.categoria) categoria, max(pr.cuenta) cuenta, max(pr.estado) estado_activo,
+           max(pr.business_model) categoria, max(pr.tipologia) tipologia, max(pr.nombre_cuenta) cuenta, max(pr.estado) estado_activo,
            exists (select 1 from public.cache_prorr_cups f where f.anio = p_anio and f.cups20 = max(e.cups20) and f.kwh <> 0) facturado
     from public.evos_agg a left join public.evos_cups e on e.punto = a.punto
-    left join public.puntos_recarga pr on pr.serial = e.serial_cruce
+    left join public.puntos_recarga pr on pr.numero_serie = e.serial_cruce
     where a.anio = p_anio group by a.punto) p;
 $$;
 grant execute on function public.evos_preparar(date[]), public.evos_dashboard(int), public.evos_puntos(int) to authenticated;
@@ -1054,15 +1054,43 @@ revoke execute on function public.evos_preparar(date[]), public.evos_dashboard(i
 
 
 -- ---------------------------------------------------------------- cruce nº de serie → CUPS
--- Maestros (la relación nº de serie → CUPS es estática: se va completando y se queda guardada)
---   puntos_recarga: un registro por nº de serie, con su CUPS cuando se conoce
+-- Maestros
+--   puntos_recarga: el listado de puntos de recarga (Public Infra), con las mismas columnas que el Excel maestro
 --   cups:           un registro por CUPS (20 primeros caracteres), con lo que sabemos de las facturas
+-- la primera versión de puntos_recarga tenía otras columnas: se sustituye (se recarga con el SQL del maestro)
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'puntos_recarga' and column_name = 'serial') then
+    drop table public.puntos_recarga;
+  end if;
+end $$;
 create table if not exists public.puntos_recarga (
-  serial text primary key, cups text, cups20 text, nombre text, oportunidad text, cuenta text, segmento text, categoria text,
-  modelo text, direccion text, cp text, provincia text, alta date, estado text, fuente text,
-  actualizado timestamptz not null default now());
-create index if not exists puntos_recarga_cups_idx on public.puntos_recarga (cups20);
-create index if not exists puntos_recarga_cp_idx on public.puntos_recarga (cp);
+  id_activo          text primary key,  -- Id. del activo
+  nombre_activo      text,              -- Nombre de activo
+  charging_points    int,               -- Charging Points
+  estado             text,              -- Estado
+  fecha_instalacion  date,              -- Fecha de instalación
+  fecha_activacion   timestamp,         -- Fecha de activación
+  order_id           text,              -- Order
+  modelo             text,              -- Modelo
+  numero_serie       text,              -- Número de serie
+  nombre_cuenta      text,              -- Nombre de la cuenta
+  direccion          text,              -- Dirección
+  provincia          text,              -- Provincia
+  business_model     text,              -- Business Model
+  tipologia          text,              -- Tipología
+  codigo_oportunidad text,              -- Código Oportunidad
+  cups               text               -- CUPS (tal cual; solo cuenta si tiene formato de CUPS)
+);
+create index if not exists puntos_recarga_serie_idx on public.puntos_recarga (numero_serie);
+create index if not exists puntos_recarga_cups20_idx on public.puntos_recarga (left(cups, 20));
+-- CUPS válido (ES + 16 dígitos + 2 letras) recortado a 20 caracteres; null si no lo es
+create or replace function public._cups20(v text) returns text language sql immutable as $$
+  select case when upper(btrim(v)) ~ '^ES\d{16}[A-Z]{2}' then left(upper(btrim(v)), 20) end;
+$$;
+-- código postal dentro de la dirección («C/ Antoni Mulet 43, 7150, Andratx» -> 07150)
+create or replace function public._cp(v text) returns text language sql immutable as $$
+  select lpad(substring(v from '(?:^|,)\s*(\d{4,5})\s*(?:,|$)'), 5, '0');
+$$;
 create table if not exists public.cups (
   cups20 text primary key, cups text, direccion text, distribuidora text, tarifa text, tension text,
   primera_factura date, ultima_factura date, actualizado timestamptz not null default now());
@@ -1091,9 +1119,10 @@ returns jsonb language plpgsql security definer set search_path = public as $$
 begin
   delete from public.evos_cups where true;
   insert into public.evos_cups (punto, serial_cruce, cups20, metodo)
-  select p.punto, c.serial, c.cups20, case when c.cups20 is null then 'sin_cups' else 'exacto' end
+  select p.punto, c.numero_serie, c.cups20, case when c.cups20 is null then 'sin_cups' else 'exacto' end
   from (select punto, max(serial) serial from public.evos_agg group by punto) p
-  join public.puntos_recarga c on c.serial = p.serial;
+  join lateral (select numero_serie, public._cups20(cups) cups20 from public.puntos_recarga
+                where numero_serie = p.serial order by public._cups20(cups) nulls last limit 1) c on true;
   insert into public.evos_cups (punto, serial_cruce, cups20, metodo)
   select p.punto, m.serial, m.cs[1], 'recuperado'
   from (select punto, max(serial) serial, max(cp) cp from public.evos_agg
@@ -1102,10 +1131,10 @@ begin
                              split_part(upper(p.serial), 'E+', 2)::int ex) y
   cross join lateral (select y.mant::numeric * power(10::numeric, y.ex) v,
                              power(10::numeric, y.ex - (length(replace(y.mant, '.', '')) - 1)) / 2 tol) z
-  join lateral (select array_agg(distinct c.cups20) cs, min(c.serial) serial
+  join lateral (select array_agg(distinct public._cups20(c.cups)) cs, min(c.numero_serie) serial
                 from public.puntos_recarga c
-                where c.cups20 is not null and c.cp = p.cp and c.serial ~ '^\d{10,}$'
-                  and abs(c.serial::numeric - z.v) <= z.tol) m on array_length(m.cs, 1) = 1
+                where public._cups20(c.cups) is not null and public._cp(c.direccion) = p.cp and c.numero_serie ~ '^\d{10,}$'
+                  and abs(c.numero_serie::numeric - z.v) <= z.tol) m on array_length(m.cs, 1) = 1
   where not exists (select 1 from public.evos_cups e where e.punto = p.punto);
   return (select jsonb_build_object('puntos', count(*), 'exacto', count(*) filter (where metodo = 'exacto'),
                                     'recuperado', count(*) filter (where metodo = 'recuperado'),
@@ -1150,7 +1179,7 @@ returns jsonb language sql stable security definer set search_path = public as $
               left join pts t using (cups20) left join dirs d using (cups20))
   select jsonb_build_object(
     'anio', p_anio,
-    'cruce', (select case when count(*) > 0 then jsonb_build_object('puntos', count(*), 'con_cups', count(cups20), 'actualizado', max(actualizado)) end
+    'cruce', (select case when count(*) > 0 then jsonb_build_object('puntos', count(*), 'con_cups', count(public._cups20(cups))) end
               from public.puntos_recarga),
     'comparables', (select coalesce(jsonb_agg(mes order by mes), '[]') from comp),
     'mes', p_mes,
@@ -1201,10 +1230,10 @@ returns jsonb language sql stable security definer set search_path = public as $
                sum(a.sesiones) sesiones, round(sum(a.kwh), 1) kwh, round(sum(a.segundos) / 3600.0, 1) horas
         from public.evos_cups e join public.evos_agg a on a.punto = e.punto and a.anio = p_anio and a.mes = p_mes
         where e.cups20 = p_cups20 group by a.punto) p),
-    'puntos_sin_sesiones', (select coalesce(jsonb_agg(c.serial order by c.serial), '[]') from public.puntos_recarga c
-        where c.cups20 = p_cups20
+    'puntos_sin_sesiones', (select coalesce(jsonb_agg(c.numero_serie order by c.numero_serie), '[]') from public.puntos_recarga c
+        where left(c.cups, 20) = p_cups20 and public._cups20(c.cups) = p_cups20
           and not exists (select 1 from public.evos_cups e join public.evos_agg a on a.punto = e.punto and a.anio = p_anio and a.mes = p_mes
-                          where e.cups20 = p_cups20 and e.serial_cruce = c.serial))
+                          where e.cups20 = p_cups20 and e.serial_cruce = c.numero_serie))
   );
 $$;
 grant execute on function public.refrescar_cruce(), public.cruce_resumen(int, int), public.cruce_detalle(int, int, text) to authenticated;
