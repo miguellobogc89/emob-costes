@@ -295,3 +295,13 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .btn.sm { padding: 3px 9px; font-size: 12px; }
 #tbEvPts td:first-child { white-space: normal; min-width: 0; } #tbEvPts { table-layout: auto; width: 100%; } #tbEvPts td { vertical-align: top; }
 #tbEvPts td:nth-child(2) { white-space: nowrap; }
+
+/* ---------- pestañas de Tablas ---------- */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 16px; overflow-x: auto; }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 9px 14px; font: inherit; font-size: 14px; color: var(--ink-2); cursor: pointer; white-space: nowrap; margin-bottom: -1px; }
+.tabs button:hover { color: var(--ink, #111); }
+.tabs button.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.pane > .card + .card, .pane > .grid + .card { margin-top: 16px; }
+.mini-h { margin: 6px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--mute); }
+.sm-h { font-size: 13px; }
+#cardEvos .chart { min-height: 240px; }

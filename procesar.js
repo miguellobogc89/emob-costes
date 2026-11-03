@@ -1,6 +1,7 @@
 /* Lectura de Excels / ZIPs en el navegador y preparación de filas para Supabase. */
 const EXT_EXCEL = /\.(xlsx|xlsm|xls)$/i;
 const EXT_ZIP = /\.zip$/i;
+const EXT_DATOS = /\.(xlsx|xlsm|xls|csv)$/i;   // lo que se puede subir dentro de un ZIP o suelto
 const esTemporal = (n) => /(^|\/)(~\$|\._)/.test(n) || n.includes('__MACOSX');
 
 const norm = (s) => String(s ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
@@ -14,16 +15,32 @@ async function recolectar(archivos, log) {
     try { z = await JSZip.loadAsync(buf); } catch { log(`⚠ ZIP no válido, se ignora: ${nombre}`); return; }
     for (const e of Object.values(z.files)) {
       if (e.dir || esTemporal(e.name)) continue;
-      if (EXT_EXCEL.test(e.name)) out.push({ nombre: `${nombre}/${e.name}`, datos: await e.async('arraybuffer') });
+      if (EXT_DATOS.test(e.name)) out.push({ nombre: `${nombre}/${e.name}`, datos: await e.async('arraybuffer') });
       else if (EXT_ZIP.test(e.name)) await zip(`${nombre}/${e.name}`, await e.async('arraybuffer'));
     }
   }
   for (const { n, f } of archivos) {
     if (esTemporal(n)) continue;
-    if (EXT_EXCEL.test(n)) out.push({ nombre: n, datos: await f.arrayBuffer() });
+    if (EXT_DATOS.test(n)) out.push({ nombre: n, datos: await f.arrayBuffer() });
     else if (EXT_ZIP.test(n)) await zip(n, await f.arrayBuffer());
   }
   return out;
+}
+
+/** Qué es un fichero: 'facturas' (Endesa), 'evos' (sesiones) o 'analitico' (Excel del equipo). null si no se reconoce. */
+function tipoFichero(nombre, datos) {
+  if (/\.csv$/i.test(nombre)) return 'evos';
+  let wb;
+  try { wb = XLSX.read(datos, { type: 'array', sheetRows: 80, cellDates: false }); } catch { return null; }
+  let ana = false;
+  for (const sh of wb.SheetNames) {
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sh], { header: 1, raw: true, defval: null, blankrows: false });
+    const cab = (aoa[0] || []).map(norm);
+    if (cab.includes('ID PSEUDOFACTURA')) return 'facturas';
+    if (cab.includes('SESSION ID')) return 'evos';
+    if (aoa.some((r) => r && norm(r[0]) === 'BT')) ana = true;
+  }
+  return ana ? 'analitico' : null;
 }
 
 // ---------------------------------------------------------------- valores
@@ -282,7 +299,7 @@ const cpEvos = (v) => { const t = String(v ?? '').trim(); return /^\d{4}$/.test(
 /** Lee un fichero de evOS y devuelve sus agregados (por mes y punto, y por día) sin datos personales. */
 async function leerEvos(nombre, datos, log) {
   const filas = await filasEvos(nombre, datos);
-  if (filas.length < 2) throw new Error(`${nombre}: está vacío`);
+  if (filas.length < 2) throw new Error(`está vacío`);
   const H = filas[0].map(norm);
   const col = (...nombres) => { for (const n of nombres) { const i = H.indexOf(norm(n)); if (i >= 0) return i; } return -1; };
   const c = {
@@ -291,7 +308,7 @@ async function leerEvos(nombre, datos, log) {
     reg: col('Region'), prov: col('Province'), ciu: col('City'), cp: col('Postal Code'), dir: col('Address'),
     pot: col('Nominal Power', 'Max station power'), imp: col('Total Amount CPO'), dur: col('Session duration'), st: col('Status'),
   };
-  if (c.id < 0 || c.ini < 0 || c.kwh < 0) throw new Error(`${nombre}: no parece un fichero de evOS (faltan «Session ID», «Session start» o «Energy consumption»)`);
+  if (c.id < 0 || c.ini < 0 || c.kwh < 0) throw new Error(`no parece un fichero de evOS (faltan «Session ID», «Session start» o «Energy consumption»)`);
   const vistos = new Set(); const agg = new Map(); const dias = new Map(); let n = 0, dup = 0, malas = 0, kwhT = 0, impT = 0;
   const t = (r, i) => (i >= 0 ? String(r[i] ?? '').trim() : '');
   for (let k = 1; k < filas.length; k++) {

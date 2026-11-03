@@ -962,8 +962,19 @@ returns jsonb language sql stable as $$
                  from a group by punto order by sum(kwh) desc limit 300) p)
   );
 $$;
-grant execute on function public.evos_preparar(date[]), public.evos_dashboard(int) to authenticated;
-revoke execute on function public.evos_preparar(date[]), public.evos_dashboard(int) from anon, public;
+-- Puntos de recarga (evOS) de un año, uno por punto
+create or replace function public.evos_puntos(p_anio int)
+returns jsonb language sql stable as $$
+  select coalesce(jsonb_agg(p order by p.kwh desc), '[]') from (
+    select punto, max(serial) serial, max(direccion) direccion, max(cp) cp, max(ciudad) ciudad, max(provincia) provincia,
+           max(region) region, string_agg(distinct nullif(ac_dc, ''), '/') ac_dc, max(potencia) potencia,
+           string_agg(distinct nullif(cpo, ''), ', ') cpo, count(distinct mes) meses,
+           sum(sesiones) sesiones, round(sum(kwh), 3) kwh, round(sum(importe), 2) importe,
+           round(sum(segundos) / 3600.0, 1) horas, min(primera) primera, max(ultima) ultima
+    from public.evos_agg where anio = p_anio group by punto) p;
+$$;
+grant execute on function public.evos_preparar(date[]), public.evos_dashboard(int), public.evos_puntos(int) to authenticated;
+revoke execute on function public.evos_preparar(date[]), public.evos_dashboard(int), public.evos_puntos(int) from anon, public;
 
 -- ---------------------------------------------------------------- ajustes finales
 -- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)

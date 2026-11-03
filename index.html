@@ -35,13 +35,10 @@
     </div>
     <nav>
       <a href="#inicio" data-v="inicio"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg>Inicio</a>
-      <a href="#facturas" data-v="facturas"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>Facturas</a>
-      <a href="#cups" data-v="cups"><svg viewBox="0 0 24 24"><path d="M7 21V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v16M5 21h13M16 9h2a1 1 0 0 1 1 1v6a1.5 1.5 0 0 0 3 0V8l-2-2M12 7l-2 4h3l-2 4"/></svg>CUPS</a>
-      <a href="#comparativa" data-v="comparativa"><svg viewBox="0 0 24 24"><path d="M12 4v16M5 8h14M5 8l-3 7a3 3 0 0 0 6 0zM19 8l-3 7a3 3 0 0 0 6 0zM8 20h8"/></svg>Comparativa</a>
-      <a href="#evos" data-v="evos"><svg viewBox="0 0 24 24"><path d="M7 21V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v16M5 21h13M16 9h2a1 1 0 0 1 1 1v6a1.5 1.5 0 0 0 3 0V8l-2-2M12 7l-2 4h3l-2 4"/></svg>evOS</a>
+      <a href="#tablas" data-v="tablas"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 10h16M4 15h16M10 10v9"/></svg>Tablas</a>
       <div class="sep"></div>
-      <a href="#correcciones" data-v="correcciones"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></svg>Correcciones</a>
       <a href="#cargar" data-v="cargar"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg>Cargar datos</a>
+      <a href="#correcciones" data-v="correcciones"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></svg>Correcciones</a>
     </nav>
     <div class="side-foot">
       <div id="sideFoot">—</div>
@@ -95,7 +92,7 @@
         </div>
 
         <div class="card comp-mini hide" id="cardComp">
-          <div class="card-h"><h3>Contraste con el analítico del equipo (BT)<button class="info" type="button" aria-label="Qué significa" data-info="Compara lo que sale de las facturas con el Excel que monta el equipo a mano, solo en los meses que hay en ambos. Por mes de consumo. Si la desviación es grande, conviene revisar ese mes en la sección Comparativa.">i</button></h3><a href="#comparativa" class="link sm">Ver comparativa →</a></div>
+          <div class="card-h"><h3>Contraste con el analítico del equipo (BT)<button class="info" type="button" aria-label="Qué significa" data-info="Compara lo que sale de las facturas con el Excel que monta el equipo a mano, solo en los meses que hay en ambos. Por mes de consumo. Si la desviación es grande, conviene revisar ese mes en Tablas › Analítico.">i</button></h3><a href="#tablas/analitico" class="link sm">Ver comparativa →</a></div>
           <div class="comp-stats" id="compStats"></div>
         </div>
 
@@ -112,6 +109,21 @@
           </div>
         </div>
 
+        <div class="card hide" id="cardEvos" style="margin-top:16px">
+          <div class="card-h"><h3>Facturado frente a evOS<button class="info" type="button" aria-label="Qué significa" data-info="Barras azules: kWh facturados por Endesa (BT + MT, por mes de consumo, con las correcciones aplicadas). Barras naranjas: kWh entregados en las sesiones de carga registradas en evOS. Si el facturado supera mucho a lo entregado, hay energía que no llega a los coches (pérdidas, consumos propios de los equipos, lecturas estimadas…).">i</button></h3><a href="#tablas/puntos" class="link sm">Ver puntos de recarga →</a></div>
+          <div class="comp-stats" id="evStats"></div>
+          <div class="grid g2-1" style="margin-top:4px">
+            <div>
+              <div class="leyenda"><span><i class="sw1"></i>Facturado (Endesa, BT + MT)</span><span><i class="sw2"></i>Entregado (evOS)</span></div>
+              <div class="chart" id="chEvos"></div>
+            </div>
+            <div>
+              <div class="card-h"><h3 class="sm-h">Energía por comunidad (evOS)</h3></div>
+              <div id="lsEvReg" class="hbars"></div>
+            </div>
+          </div>
+        </div>
+
         <div class="grid g2">
           <div class="card">
             <div class="card-h"><h3>Desglose del coste<button class="info" type="button" aria-label="Qué significa" data-info="En qué se va el dinero: energía (los kWh), potencia contratada (fijo aunque no se use), exceso de potencia (penalización), alquiler del contador, impuesto eléctrico, otros conceptos (bono social, derechos de acceso) e IVA.">i</button></h3><span class="muted sm" id="hCostes"></span></div>
@@ -125,7 +137,7 @@
 
         <div class="grid g2-1">
           <div class="card">
-            <div class="card-h"><h3>CUPS con más consumo<button class="info" type="button" aria-label="Qué significa" data-info="Los 10 CUPS que más consumen, con su importe y €/kWh. Sirve para ver dónde se concentra el gasto y detectar CUPS con un €/kWh anormalmente alto.">i</button></h3><a href="#cups" class="link sm">Ver todos →</a></div>
+            <div class="card-h"><h3>CUPS con más consumo<button class="info" type="button" aria-label="Qué significa" data-info="Los 10 CUPS que más consumen, con su importe y €/kWh. Sirve para ver dónde se concentra el gasto y detectar CUPS con un €/kWh anormalmente alto.">i</button></h3><a href="#tablas/cups" class="link sm">Ver todos →</a></div>
             <div class="tbl-wrap"><table class="tbl" id="tbTop"></table></div>
           </div>
           <div class="card">
@@ -137,8 +149,13 @@
       </div>
     </section>
 
-    <!-- ---------- FACTURAS ---------- -->
-    <section class="vista hide" id="v-facturas">
+    <!-- ---------- TABLAS ---------- -->
+    <section class="vista hide" id="v-tablas">
+      <div class="tabs" id="tabs" role="tablist">
+        <button data-t="bt">Facturas BT</button><button data-t="mt">Facturas MT</button><button data-t="cups">CUPS</button><button data-t="evos">evOS</button><button data-t="puntos">Puntos de recarga</button><button data-t="analitico">Analítico</button>
+      </div>
+      <div class="pane" data-p="bt mt">
+
       <div class="card">
         <div class="toolbar">
           <input type="search" id="fQ" placeholder="Buscar CUPS, dirección, ID factura, pestaña…">
@@ -154,10 +171,9 @@
         <div class="tbl-wrap big"><table class="tbl" id="tbFact"></table></div>
         <div class="pager" id="fPager"></div>
       </div>
-    </section>
+          </div>
+      <div class="pane" data-p="cups">
 
-    <!-- ---------- CUPS ---------- -->
-    <section class="vista hide" id="v-cups">
       <div class="card">
         <div class="toolbar">
           <input type="search" id="pQ" placeholder="Buscar CUPS, dirección o distribuidora…">
@@ -167,31 +183,43 @@
         </div>
         <div class="tbl-wrap big"><table class="tbl" id="tbPuntos"></table></div>
       </div>
-    </section>
-
-    <!-- ---------- COMPARATIVA ---------- -->
-    <section class="vista hide" id="v-comparativa">
-      <div class="grid g2-1 g-top">
-        <div class="card">
-          <div class="card-h">
-            <h3>Facturas vs. analítico del equipo (BT)<button class="info" type="button" aria-label="Qué significa" data-info="Las barras azules salen de las facturas de Endesa cargadas aquí; las naranjas, del Excel del equipo. Siempre por mes de consumo. Los meses sin factura todavía no son comparables.">i</button></h3>
-            <span class="pill-bt">Solo BT</span>
           </div>
-          <div id="compVacio" class="empty-mini hide"></div>
-          <div id="compCuerpo">
-            <div class="comp-stats" id="compKpis"></div>
-            <div class="leyenda"><span><i class="sw1"></i>Facturas</span><span><i class="sw2"></i>Analítico del equipo</span></div>
-            <div class="chart" id="chComp"></div>
-          </div>
+      <div class="pane" data-p="evos">
+      <div class="card">
+        <div class="toolbar">
+          <input type="search" id="eQ" placeholder="Buscar nº de serie, dirección, ciudad, código postal…">
+          <span class="grow"></span>
+          <span class="muted sm" id="eTotal"></span>
+          <button class="btn" id="eExport">Exportar Excel</button>
         </div>
-        <div class="card">
-          <div class="card-h"><h3>Analítico del equipo</h3></div>
-          <div class="stack">
-            <div id="anaEstado" class="muted"></div>
-            <label class="btn pri">Subir Excel del equipo<input id="anaFile" type="file" accept=".xlsx,.xlsm,.xls" hidden></label>
-            <p class="note">Es el Excel «Costes por BT y MT» (consumo mensual y CV / RevShare / CF por BT y MT). Se guarda aparte de las facturas y, si subes otro del mismo año, la comparativa usa el más reciente.</p>
-            <div class="tbl-wrap"><table class="tbl" id="tbAna"></table></div>
-          </div>
+        <div class="tbl-wrap big"><table class="tbl" id="tbEvAgg"></table></div>
+        <div class="pager" id="ePager"></div>
+        <p class="note">Una fila por mes y punto de carga, con la suma de sus sesiones. No se guarda cada sesión ni datos personales (tarjeta, cliente, vehículo).</p>
+      </div>
+      </div>
+      <div class="pane" data-p="puntos">
+      <div class="card">
+        <div class="toolbar">
+          <input type="search" id="uQ" placeholder="Buscar nº de serie, dirección, ciudad, código postal…">
+          <span class="grow"></span>
+          <span class="muted sm" id="uTotal"></span>
+          <button class="btn" id="uExport">Exportar Excel</button>
+        </div>
+        <div class="tbl-wrap big"><table class="tbl" id="tbPuntosEv"></table></div>
+        <p class="note">Puntos de carga según evOS, identificados por nº de serie + dirección + código postal (algunos nº de serie vienen estropeados en notación científica). La columna <b>CUPS</b> se rellenará cuando carguemos la tabla de equivalencia nº de serie → CUPS.</p>
+      </div>
+      </div>
+      <div class="pane" data-p="analitico">
+      <div class="card">
+        <div class="card-h">
+          <h3>Facturas vs. analítico del equipo (BT)<button class="info" type="button" aria-label="Qué significa" data-info="Las barras azules salen de las facturas de Endesa cargadas aquí; las naranjas, del Excel del equipo. Siempre por mes de consumo. Los meses sin factura todavía no son comparables.">i</button></h3>
+          <span class="muted sm" id="anaUsando"></span>
+        </div>
+        <div id="compVacio" class="empty-mini hide"></div>
+        <div id="compCuerpo">
+          <div class="comp-stats" id="compKpis"></div>
+          <div class="leyenda"><span><i class="sw1"></i>Facturas</span><span><i class="sw2"></i>Analítico del equipo</span></div>
+          <div class="chart" id="chComp"></div>
         </div>
       </div>
       <div class="card">
@@ -199,62 +227,7 @@
         <div class="tbl-wrap"><table class="tbl" id="tbComp"></table></div>
         <p class="note"><b>Cómo se compara.</b> Consumo: kWh facturados por mes de consumo. <b>CV</b> se compara con el término de energía de las facturas (€/kWh); <b>CF</b>, con potencia contratada + alquiler de equipos (€/kWh); el <b>total</b> de las facturas incluye todo sin IVA (también excesos, impuesto eléctrico y otros conceptos) y se compara con CV + CF del equipo. El <b>RevShare</b> no aparece en las facturas de Endesa. <b>Solo BT</b> por ahora: del Excel del equipo se toma el bloque BT; de las facturas, las de tarifas BT (todas salvo 6.x).</p>
       </div>
-    </section>
-
-    <!-- ---------- evOS ---------- -->
-    <section class="vista hide" id="v-evos">
-      <div id="evVacio" class="empty hide">
-        <h2>Todavía no hay datos de evOS</h2>
-        <p>Sube los ficheros de sesiones que exportas de evOS (CSV o Excel). Puedes subir varios a la vez.</p>
       </div>
-      <div id="evPanel">
-        <div class="kpis">
-          <div class="card hero">
-            <span class="lbl"><span id="evHeroLbl">Energía entregada según evOS</span><button class="info" type="button" aria-label="Qué significa" data-info="Suma de la energía de todas las sesiones de carga registradas en evOS en el año (lo que reciben los coches). 1 MWh = 1.000 kWh.">i</button></span>
-            <div class="hero-val"><span id="evKwh">—</span><small>MWh</small></div>
-            <span class="muted sm" id="evHeroSub"></span>
-          </div>
-          <div class="card tile"><span class="lbl">Sesiones de carga</span><b id="evSes">—</b><span class="muted sm" id="evSesSub"></span></div>
-          <div class="card tile"><span class="lbl">Facturado / evOS<button class="info" type="button" aria-label="Qué significa" data-info="kWh facturados por Endesa (BT + MT, por mes de consumo) divididos entre los kWh entregados según evOS, en los meses que hay en ambos. Por encima del 100 %: se factura más energía de la que llega a los coches (pérdidas, consumos propios de los equipos, lecturas estimadas…).">i</button></span><b id="evRatio">—</b><span class="muted sm" id="evRatioSub"></span></div>
-          <div class="card tile"><span class="lbl">Importe CPO<button class="info" type="button" aria-label="Qué significa" data-info="Suma del campo «Total Amount CPO» de las sesiones: lo cobrado por las recargas según evOS.">i</button></span><b id="evImp">—</b><span class="muted sm" id="evImpSub"></span></div>
-          <div class="card tile"><span class="lbl">Puntos de carga activos<button class="info" type="button" aria-label="Qué significa" data-info="Puntos distintos con alguna sesión (número de serie + dirección + código postal). Algunos números de serie vienen estropeados por Excel en notación científica; por eso se usa también la dirección.">i</button></span><b id="evPuntos">—</b><span class="muted sm" id="evDC"></span></div>
-        </div>
-        <div class="card" style="margin-top:16px">
-          <div class="card-h"><h3>Energía por mes: evOS frente a facturas<button class="info" type="button" aria-label="Qué significa" data-info="Barras naranjas: kWh entregados en las sesiones de evOS. Barras azules: kWh facturados por Endesa (BT + MT, por mes de consumo, con las reglas de corrección aplicadas). Pasa el ratón para ver la relación entre ambos.">i</button></h3><span class="muted sm">kWh · por mes</span></div>
-          <div class="leyenda"><span><i class="sw1"></i>Facturado (Endesa, BT + MT)</span><span><i class="sw2"></i>Entregado (evOS)</span></div>
-          <div class="chart" id="chEvos"></div>
-        </div>
-        <div class="grid g1-2">
-          <div class="card">
-            <div class="card-h"><h3>Energía por comunidad</h3><span class="muted sm">kWh · sesiones</span></div>
-            <div id="lsEvReg" class="hbars"></div>
-          </div>
-          <div class="card">
-            <div class="card-h"><h3>Puntos con más energía</h3><span class="muted sm" id="evPtsTot"></span></div>
-            <div class="tbl-wrap" style="max-height:420px"><table class="tbl" id="tbEvPts"></table></div>
-          </div>
-        </div>
-      </div>
-      <div class="grid g2-1">
-        <div class="card">
-          <div class="card-h"><h3>Cargar ficheros de evOS</h3><span class="muted sm">.csv · .xlsx · .zip</span></div>
-          <div id="evDrop" class="drop">
-            <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg>
-            <p><b>Arrastra aquí</b> los ficheros de sesiones de evOS</p>
-            <div class="row"><label class="btn">Elegir ficheros<input id="evFiles" type="file" multiple accept=".csv,.xlsx,.xls,.zip" hidden></label></div>
-          </div>
-          <ul id="evCola" class="cola"></ul>
-          <div class="row end"><button class="btn" id="evLimpiar">Limpiar</button><button class="btn pri" id="evProcesar" disabled>Procesar y guardar</button></div>
-          <div id="evProgreso" class="hide"><div class="barra"><span id="evBar"></span></div><p class="muted sm" id="evProgTxt"></p></div>
-          <pre id="evLog" class="hide"></pre>
-        </div>
-        <div class="card">
-          <div class="card-h"><h3>Ficheros cargados</h3></div>
-          <p class="note">Se guarda un resumen por mes y punto de carga (no cada sesión) y sin datos personales: tarjeta, cliente y vehículo no se guardan. Si vuelves a subir un periodo ya cargado, sustituye al anterior.</p>
-          <div class="tbl-wrap" style="max-height:360px"><table class="tbl" id="tbEvLotes"></table></div>
-        </div>
-      </div>
-      <p class="note">Para el cruce <b>CUPS a CUPS</b> con las facturas hará falta una tabla de equivalencia punto de carga → CUPS (evOS no trae el CUPS).</p>
     </section>
 
     <!-- ---------- CORRECCIONES ---------- -->
@@ -295,16 +268,17 @@
 
     <!-- ---------- CARGAR ---------- -->
     <section class="vista hide" id="v-cargar">
-      <div class="grid g2-1">
+      <div class="grid g2-1 g-top">
         <div class="card">
-          <div class="card-h"><h3>Subir facturas</h3><span class="muted sm">.xlsx · .xls · .zip · carpetas</span></div>
+          <div class="card-h"><h3>Subir ficheros</h3><span class="muted sm">.xlsx · .xls · .csv · .zip · carpetas</span></div>
           <div id="drop">
             <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg>
-            <p><b>Arrastra aquí</b> ficheros, carpetas o ZIPs</p>
+            <p><b>Arrastra aquí</b> ficheros, carpetas o ZIPs, mezclados si quieres</p>
             <div class="row">
-              <label class="btn">Elegir ficheros<input id="inFiles" type="file" multiple accept=".xlsx,.xlsm,.xls,.zip" hidden></label>
+              <label class="btn">Elegir ficheros<input id="inFiles" type="file" multiple accept=".xlsx,.xlsm,.xls,.csv,.zip" hidden></label>
               <label class="btn">Elegir carpeta<input id="inDir" type="file" webkitdirectory directory multiple hidden></label>
             </div>
+            <p class="muted sm">Cada fichero se reconoce solo: <b>facturas agrupadas de Endesa</b>, <b>sesiones de evOS</b> o <b>analítico del equipo</b> («Costes por BT y MT»).</p>
           </div>
           <ul id="cola"></ul>
           <div class="row end">
@@ -320,19 +294,36 @@
         <div class="card">
           <div class="card-h"><h3>Datos guardados</h3></div>
           <div class="stack">
+            <h4 class="mini-h">Facturas de Endesa</h4>
             <div class="kv"><span>Filas</span><b id="dFilas">—</b></div>
             <div class="kv"><span>Facturas</span><b id="dFact">—</b></div>
             <div class="kv"><span>Última carga</span><b id="dUlt">—</b></div>
-            <p class="note">Las filas repetidas se eliminan siempre: dentro de una carga y respecto a lo ya guardado en la base de datos.</p>
-            <button class="btn pri" id="btnExportAll">Descargar Excel unificado</button>
-            <button class="btn danger" id="btnVaciar">Vaciar datos</button>
+            <h4 class="mini-h">evOS</h4>
+            <div class="kv"><span>Ficheros</span><b id="dEvFich">—</b></div>
+            <div class="kv"><span>Sesiones</span><b id="dEvSes">—</b></div>
+            <div class="kv"><span>Días cubiertos</span><b id="dEvRango">—</b></div>
+            <h4 class="mini-h">Analítico del equipo</h4>
+            <div id="anaEstado" class="muted sm">—</div>
+            <p class="note">Las filas repetidas de facturas se eliminan siempre. Un fichero de evOS de días ya cargados sustituye al anterior. Un analítico del mismo año sustituye al anterior en la comparativa.</p>
+            <button class="btn pri" id="btnExportAll">Descargar Excel unificado de facturas</button>
+            <button class="btn danger" id="btnVaciar">Vaciar facturas</button>
             <p class="muted sm" id="dAdmin"></p>
           </div>
         </div>
       </div>
       <div class="card">
-        <div class="card-h"><h3>Historial de cargas</h3></div>
+        <div class="card-h"><h3>Historial de cargas de facturas</h3></div>
         <div class="tbl-wrap"><table class="tbl" id="tbCargas"></table></div>
+      </div>
+      <div class="grid g2-1">
+        <div class="card">
+          <div class="card-h"><h3>Ficheros de evOS cargados</h3><span class="muted sm" id="evLotesTot"></span></div>
+          <div class="tbl-wrap" style="max-height:420px"><table class="tbl" id="tbEvLotes"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>Analíticos del equipo cargados</h3></div>
+          <div class="tbl-wrap"><table class="tbl" id="tbAna"></table></div>
+        </div>
       </div>
     </section>
   </main>

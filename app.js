@@ -225,6 +225,7 @@ async function cargarDashboard() {
   const guardado = LS.get(clave);
   if (ST.anio && !COMP) COMP = LS.get('comp.' + ST.anio);
   if (guardado && !guardado.vacio) mostrarDash(guardado); else skDashboard();
+  cargarEvosInicio();
   const [d] = await Promise.all([seguro(() => SB.rpc('dashboard', args())), ST.anio ? seguro(datosComp) : null]);
   if (pedido !== JSON.stringify(args())) return;      // el usuario cambió el filtro mientras cargaba
   if (!d) return;
@@ -343,10 +344,12 @@ async function cabeceras() {
   }
   return CABS;
 }
+/** En Tablas, las pestañas BT y MT fijan la tensión; fuera, manda el filtro de arriba. */
+const tensionFact = () => (ST.vista === 'tablas' && ['bt', 'mt'].includes(ST.tab) ? ST.tab.toUpperCase() : ST.tension);
 function queryFacturas() {
   const q = {}; const conds = [];
   if (ST.anio) { const c = ST.base === 'emision' ? 'fecha_emision' : 'fecha_hasta'; conds.push(`${c}.gte.${ST.anio}-01-01`, `${c}.lt.${ST.anio + 1}-01-01`); }
-  if (ST.tension) conds.push(`tension.eq.${ST.tension}`);
+  const ten = tensionFact(); if (ten) conds.push(`tension.eq.${ten}`);
   const t = $('#fQ').value.trim().replace(/[",()]/g, ' ');
   if (t) conds.push(`or(${['cups', 'direccion', 'id_factura', 'sheet_code'].map((c) => `${c}.ilike."*${t}*"`).join(',')})`);
   if (conds.length) q.and = `(${conds.join(',')})`;
@@ -601,12 +604,11 @@ async function cargarComparativa() {
   skTabla($('#tbComp'), 12, 6);
   const d = await seguro(datosComp);
   if (!d) return;
-  pintarAnaEstado(d);
-  cargarHistorialAna();
   const anio = d.anio;
+  $('#anaUsando').textContent = d.carga ? `Analítico: ${d.carga.archivo || 'sin nombre'}` : '';
   if (!d.carga) {
     $('#compCuerpo').classList.add('hide'); $('#compVacio').classList.remove('hide');
-    $('#compVacio').innerHTML = `No hay analítico del equipo para <b>${anio}</b>.<br>Súbelo con el botón «Subir Excel del equipo».` +
+    $('#compVacio').innerHTML = `No hay analítico del equipo para <b>${anio}</b>.<br>Súbelo en «Cargar datos».` +
       (d.anios_equipo.length ? `<br><span class="sm">Hay analítico de: ${d.anios_equipo.join(', ')}. Cambia el año arriba.</span>` : '');
     $('#tbComp').innerHTML = ''; $('#compSeg').textContent = '';
     return;
@@ -652,21 +654,16 @@ async function cargarHistorialAna() {
   $$('.aDel').forEach((b) => b.onclick = async () => {
     if (b.dataset.ok !== '1') { b.dataset.ok = '1'; b.textContent = '¿Seguro?'; setTimeout(() => { b.dataset.ok = ''; b.textContent = 'Borrar'; }, 3000); return; }
     await seguro(() => SB.rest('DELETE', 'analitico_cargas', { query: { id: 'eq.' + b.dataset.id }, prefer: 'return=minimal' }));
-    COMP = null; cargarComparativa(); toast('Analítico borrado');
+    COMP = null; COMP_FRESCO = null; cargarHistorialAna(); seguro(datosComp).then((d) => d && pintarAnaEstado(d)); toast('Analítico borrado');
   });
 }
-async function subirAnalitico(file) {
-  try {
-    const r = leerAnalitico(await file.arrayBuffer());
-    const [c] = await SB.insert('analitico_cargas', [{ anio: r.anio, archivo: file.name }], { query: { select: 'id' } });
-    await SB.insert('analitico_valores', r.valores.map((v) => ({ carga_id: c.id, ...v })), { prefer: 'return=minimal' });
-    COMP = null;
-    if (ST.anio !== r.anio) { ST.anio = r.anio; ST.todo = false; $('#selAnio').value = r.anio; guardarFiltros(); }
-    toast(`Analítico ${r.anio} guardado: ${r.valores.length} valores${r.avisos.length ? ' · ' + r.avisos.join(' ') : ''}`, 7000);
-    cargarComparativa();
-  } catch (e) {
-    if (e.message === 'sin_sesion') mostrarLogin(); else toast('No se pudo leer el Excel del equipo: ' + e.message, 9000);
-  }
+/** Guarda un Excel del analítico del equipo (desde la carga única). */
+async function guardarAnalitico(nombre, datos, log) {
+  const r = leerAnalitico(datos);
+  const [c] = await SB.insert('analitico_cargas', [{ anio: r.anio, archivo: nombre.split('/').pop() }], { query: { select: 'id' } });
+  await SB.insert('analitico_valores', r.valores.map((v) => ({ carga_id: c.id, ...v })), { prefer: 'return=minimal' });
+  COMP = null; COMP_FRESCO = null;
+  log(`✔ ${nombre}: analítico del equipo ${r.anio} guardado (${r.valores.length} valores)${r.avisos.length ? ' · ' + r.avisos.join(' ') : ''}`);
 }
 
 // ---------------------------------------------------------------- CORRECCIONES
@@ -745,10 +742,10 @@ async function guardarRegla(e) {
   datosCambiados(); await cargarCorrecciones(); toast('Corrección guardada y aplicada');
 }
 /** Tras cambiar datos o correcciones: olvidar cachés y recalcular lo visible */
-function datosCambiados() { PUNTOS.clave = null; DASH = null; COMP_FRESCO = null; }
+function datosCambiados() { PUNTOS.clave = null; DASH = null; COMP_FRESCO = null; EVP = { clave: null, filas: [] }; }
 
 // ---------------------------------------------------------------- CARGAR
-const OK = /\.(xlsx|xlsm|xls|zip)$/i;
+const OK = /\.(xlsx|xlsm|xls|csv|zip)$/i;
 let COLA = [];
 function encolar(list) {
   for (const f of list) {
@@ -800,29 +797,48 @@ async function idCabecera(clave, columnas) {
   return r[0].id;
 }
 
-/** Procesa y guarda fichero a fichero (no acumula todo en memoria: admite cargas grandes). */
+/** Procesa y guarda fichero a fichero (no acumula todo en memoria: admite cargas grandes).
+ *  Cada fichero se reconoce solo: facturas de Endesa, sesiones de evOS o analítico del equipo. */
 async function procesar() {
   const b = $('#btnProcesar'); b.disabled = true; b.textContent = 'Procesando…';
   const lineas = []; const log = (l) => { lineas.push(l); $('#resLog').textContent = lineas.join('\n'); $('#resLog').scrollTop = 1e9; };
   $('#resCarga').classList.remove('hide'); $('#resKpis').innerHTML = ''; $('#resLog').textContent = '';
   const tot = { leidas: 0, dup: 0, nuevas: 0, guardadas: 0 };
-  const pintarKpis = () => { $('#resKpis').innerHTML = [['Filas leídas', tot.leidas], ['Duplicadas en la carga', tot.dup], ['Ya existentes', tot.guardadas - tot.nuevas], ['Nuevas guardadas', tot.nuevas]]
+  const cuenta = { facturas: 0, evos: 0, analitico: 0, error: 0, otros: 0 };
+  const pintarKpis = () => { $('#resKpis').innerHTML = (cuenta.facturas ? [['Filas de facturas leídas', tot.leidas], ['Duplicadas en la carga', tot.dup], ['Ya existentes', tot.guardadas - tot.nuevas], ['Facturas: filas nuevas', tot.nuevas]] : [])
+    .concat([['Ficheros de evOS', cuenta.evos], ['Analíticos', cuenta.analitico]].filter(([, v]) => v))
     .map(([k, v]) => `<div><b>${fN(v)}</b><span>${k}</span></div>`).join(''); };
   const cola = [...COLA];
-  let carga = null;
+  let carga = null; const nombresFact = [];
   try {
-    [carga] = await SB.insert('cargas', [{ archivos: cola.map((x) => x.n) }], { query: { select: 'id' } });
     const vistosF = new Map(); const vistas = new Set();
     for (const [k, item] of cola.entries()) {
-      const excels = await recolectar([item], log);          // un fichero de la cola (o el contenido de un ZIP)
-      for (const [j, e] of excels.entries()) {
-        const etiqueta = `Fichero ${k + 1} de ${cola.length}${excels.length > 1 ? ` (${j + 1}/${excels.length} del ZIP)` : ''}: ${e.nombre.split('/').pop()}`;
-        const base = (k + j / excels.length) / cola.length * 100;
+      const fichs = await recolectar([item], log);          // un fichero de la cola (o el contenido de un ZIP)
+      for (const [j, e] of fichs.entries()) {
+        const etiqueta = `Fichero ${k + 1} de ${cola.length}${fichs.length > 1 ? ` (${j + 1}/${fichs.length} del ZIP)` : ''}: ${e.nombre.split('/').pop()}`;
+        const base = (k + j / fichs.length) / cola.length * 100, ancho = 100 / cola.length / fichs.length;
         progreso(base, `${etiqueta} · leyendo…`);
         await new Promise((r) => setTimeout(r, 20));
         const h = await shaBuf(e.datos);
         if (vistosF.has(h)) { log(`↷ ${e.nombre}: idéntico a ${vistosF.get(h)}, se omite`); continue; }
         vistosF.set(h, e.nombre);
+        const tipo = tipoFichero(e.nombre, e.datos);
+        if (!tipo) { cuenta.otros++; log(`⚠ ${e.nombre}: no es un fichero reconocido (facturas de Endesa, evOS o analítico del equipo), se omite`); continue; }
+        if (tipo !== 'facturas') {
+          // evOS y analítico: un error en uno no detiene el resto de la carga
+          try {
+            if (tipo === 'evos') await guardarEvos(e, log, (f, t) => progreso(base + f * ancho, `${etiqueta} · ${t}`));
+            else await guardarAnalitico(e.nombre, e.datos, log);
+            cuenta[tipo]++;
+          } catch (err) {
+            if (err.message === 'sin_sesion') throw err;
+            cuenta.error++; log(`✖ ${e.nombre}: ${err.message}`);
+          }
+          e.datos = null; pintarKpis(); continue;
+        }
+        // facturas de Endesa
+        cuenta.facturas++; nombresFact.push(item.n);
+        if (!carga) [carga] = await SB.insert('cargas', [{ archivos: [item.n] }], { query: { select: 'id' } });
         const partes = leerLibro(e.nombre, e.datos, log);
         e.datos = null;
         tot.leidas += partes.reduce((a, p) => a + p.filas.length, 0);
@@ -840,19 +856,22 @@ async function procesar() {
             tot.nuevas += ins.length;
           }
           tot.guardadas += trozo.length;
-          progreso(base + ((i + trozo.length) / filas.length) * (100 / cola.length / excels.length), `${etiqueta} · ${fN(i + trozo.length)} / ${fN(filas.length)} filas revisadas · ${fN(tot.nuevas)} nuevas`);
+          progreso(base + ((i + trozo.length) / filas.length) * ancho, `${etiqueta} · ${fN(i + trozo.length)} / ${fN(filas.length)} filas revisadas · ${fN(tot.nuevas)} nuevas`);
         }
         pintarKpis();
+        await SB.update('cargas', { id: 'eq.' + carga.id }, { archivos: [...new Set(nombresFact)], leidas: tot.leidas, duplicadas_en_carga: tot.dup, ya_existentes: tot.guardadas - tot.nuevas, nuevas: tot.nuevas });
       }
-      await SB.update('cargas', { id: 'eq.' + carga.id }, { leidas: tot.leidas, duplicadas_en_carga: tot.dup, ya_existentes: tot.guardadas - tot.nuevas, nuevas: tot.nuevas });
     }
-    progreso(99, 'Revisando refacturaciones y copias…');
-    const rs = await SB.rpc('recalcular_sustituidas');
-    if (rs?.sustituidas) log(`⇄ ${fN(rs.sustituidas)} filas marcadas como sustituidas (refacturaciones o copias): no se cuentan dos veces`);
-    if (!tot.leidas) log('✖ No se encontró ningún dato.');
-    if (tot.guardadas - tot.nuevas) log(`↷ ${fN(tot.guardadas - tot.nuevas)} filas ya estaban guardadas de cargas anteriores, se omiten`);
-    log(`＋ ${fN(tot.nuevas)} filas nuevas guardadas`);
-    progreso(100, 'Carga completada'); pintarKpis();
+    if (cuenta.facturas) {
+      progreso(99, 'Revisando refacturaciones y copias…');
+      const rs = await SB.rpc('recalcular_sustituidas');
+      if (rs?.sustituidas) log(`⇄ ${fN(rs.sustituidas)} filas marcadas como sustituidas (refacturaciones o copias): no se cuentan dos veces`);
+      if (tot.guardadas - tot.nuevas) log(`↷ ${fN(tot.guardadas - tot.nuevas)} filas ya estaban guardadas de cargas anteriores, se omiten`);
+      log(`＋ ${fN(tot.nuevas)} filas nuevas de facturas guardadas`);
+    }
+    const res = [cuenta.facturas && `${cuenta.facturas} de facturas`, cuenta.evos && `${cuenta.evos} de evOS`, cuenta.analitico && `${cuenta.analitico} analítico(s)`].filter(Boolean).join(' · ');
+    log(`— Resumen: ${res || 'ningún fichero guardado'}${cuenta.error ? ` · ${cuenta.error} con error (ver arriba)` : ''}${cuenta.otros ? ` · ${cuenta.otros} no reconocido(s)` : ''}`);
+    progreso(100, cuenta.error ? 'Carga terminada con avisos: revisa los ficheros marcados con ✖.' : 'Carga completada'); pintarKpis();
     COLA = []; pintarCola();
   } catch (err) {
     if (err.message === 'sin_sesion') { mostrarLogin(); return; }
@@ -861,183 +880,269 @@ async function procesar() {
     pintarKpis();
   } finally {
     b.textContent = 'Procesar y guardar'; b.disabled = !COLA.length;
-    datosCambiados(); await refrescarAnios(); cargarCargas();
+    datosCambiados(); await refrescarAnios(); cargarDatosCargar();
   }
 }
-
 
 // ---------------------------------------------------------------- evOS
-let EVOS = null, EVCOLA = [];
-function encolarEvos(list) {
-  for (const f of list) {
-    if (!/\.(csv|xlsx|xls|zip)$/i.test(f.name) || /^~\$/.test(f.name)) continue;
-    if (!EVCOLA.some((x) => x.n === f.name && x.f.size === f.size)) EVCOLA.push({ n: f.name, f });
+/** Guarda un fichero de evOS: agregados por mes y punto, y por día. Sustituye los días ya cargados. */
+async function guardarEvos(fich, log, prog) {
+  const r = await leerEvos(fich.nombre.split('/').pop(), fich.datos, log);
+  if (!r.sesiones) throw new Error('sin sesiones válidas');
+  const prep = await SB.rpc('evos_preparar', { p_dias: r.dias });
+  if (!prep.ok) {
+    const p = prep.parciales.map((x) => `${x.archivo} (${fFecha(x.desde)}–${fFecha(x.hasta)})`).join(', ');
+    throw new Error(`sus días se solapan solo en parte con ${p}. Borra antes ese fichero (abajo, en «Ficheros de evOS cargados») o sube uno que cubra los mismos días.`);
   }
-  pintarColaEvos();
-}
-function pintarColaEvos() {
-  $('#evCola').innerHTML = EVCOLA.map((x) => `<li class="${x.est || ''}">${esc(x.n)}<span>${x.txt ? esc(x.txt) : fN(x.f.size / 1048576, 2) + ' MB'}</span></li>`).join('');
-  $('#evProcesar').disabled = !EVCOLA.some((x) => !x.est);
-}
-/** Expande ZIPs a ficheros de evOS [{nombre, datos}] */
-async function ficherosEvos(item) {
-  if (!/\.zip$/i.test(item.n)) return [{ nombre: item.n, datos: await item.f.arrayBuffer() }];
-  const z = await JSZip.loadAsync(await item.f.arrayBuffer()); const out = [];
-  for (const e of Object.values(z.files)) if (!e.dir && !esTemporal(e.name) && /\.(csv|xlsx|xls)$/i.test(e.name)) out.push({ nombre: e.name.split('/').pop(), datos: await e.async('arraybuffer') });
-  return out;
-}
-function progEvos(pct, txt) { $('#evProgreso').classList.remove('hide'); $('#evBar').style.width = Math.round(pct) + '%'; $('#evProgTxt').textContent = txt; }
-
-async function procesarEvos() {
-  const b = $('#evProcesar'); b.disabled = true; b.textContent = 'Procesando…';
-  const lineas = []; const log = (l) => { lineas.push(l); $('#evLog').textContent = lineas.join('\n'); $('#evLog').scrollTop = 1e9; };
-  $('#evLog').classList.remove('hide');
-  const pend = EVCOLA.filter((x) => !x.est);
-  let hechos = 0;
-  for (const [k, item] of pend.entries()) {
-    const marca = (est, txt) => { item.est = est; item.txt = txt; pintarColaEvos(); };
-    try {
-      for (const fich of await ficherosEvos(item)) {
-        progEvos(k / pend.length * 100, `Fichero ${k + 1} de ${pend.length}: ${fich.nombre} · leyendo…`);
-        await new Promise((r) => setTimeout(r, 20));
-        const r = await leerEvos(fich.nombre, fich.datos, log);
-        if (!r.sesiones) { log(`✖ ${fich.nombre}: sin sesiones válidas`); continue; }
-        const prep = await SB.rpc('evos_preparar', { p_dias: r.dias });
-        if (!prep.ok) {
-          const p = prep.parciales.map((x) => `${x.archivo} (${fFecha(x.desde)}–${fFecha(x.hasta)})`).join(', ');
-          throw new Error(`se solapa solo en parte con lo ya cargado de ${p}. Borra antes ese fichero en «Ficheros cargados» o sube uno que cubra los mismos días.`);
-        }
-        if (prep.sustituidos) log(`⇄ ${fich.nombre}: sustituye a ${prep.sustituidos} carga(s) anterior(es) de esos días`);
-        const [lote] = await SB.insert('evos_lotes', [{ archivo: fich.nombre, desde: r.dias[0], hasta: r.dias.at(-1), dias: r.dias,
-          sesiones: r.sesiones, kwh: Math.round(r.kwh * 10000) / 10000, importe: Math.round(r.importe * 10000) / 10000 }], { query: { select: 'id' } });
-        try {
-          const N = 500, tot = r.agg.length + r.porDia.length; let ok = 0;
-          for (const [tabla, filas] of [['evos_agg', r.agg], ['evos_dia', r.porDia]]) {
-            for (let i = 0; i < filas.length; i += N) {
-              await SB.insert(tabla, filas.slice(i, i + N).map((f) => ({ ...f, lote_id: lote.id })), { prefer: 'return=minimal' });
-              ok += Math.min(N, filas.length - i);
-              progEvos((k + ok / tot) / pend.length * 100, `Fichero ${k + 1} de ${pend.length}: ${fich.nombre} · guardando ${fN(ok)} / ${fN(tot)}`);
-            }
-          }
-        } catch (e) { await SB.rest('DELETE', 'evos_lotes', { query: { id: 'eq.' + lote.id } }).catch(() => {}); throw e; }
-        hechos++;
+  if (prep.sustituidos) log(`⇄ ${r.nombre}: sustituye a ${prep.sustituidos} carga(s) anterior(es) de esos días`);
+  const [lote] = await SB.insert('evos_lotes', [{ archivo: r.nombre, desde: r.dias[0], hasta: r.dias.at(-1), dias: r.dias,
+    sesiones: r.sesiones, kwh: Math.round(r.kwh * 10000) / 10000, importe: Math.round(r.importe * 10000) / 10000 }], { query: { select: 'id' } });
+  try {
+    const N = 500, tot = r.agg.length + r.porDia.length; let ok = 0;
+    for (const [tabla, filas] of [['evos_agg', r.agg], ['evos_dia', r.porDia]]) {
+      for (let i = 0; i < filas.length; i += N) {
+        await SB.insert(tabla, filas.slice(i, i + N).map((f) => ({ ...f, lote_id: lote.id })), { prefer: 'return=minimal' });
+        ok += Math.min(N, filas.length - i);
+        prog?.(ok / tot, `guardando evOS ${fN(ok)} / ${fN(tot)}`);
       }
-      marca('ok', '✔ guardado');
-    } catch (err) {
-      if (err.message === 'sin_sesion') { mostrarLogin(); return; }
-      log(`✖ ${item.n}: ${err.message}`); marca('err', '✖ no guardado');
     }
-  }
-  progEvos(100, `Terminado: ${hechos} fichero(s) guardado(s).`);
-  b.textContent = 'Procesar y guardar'; pintarColaEvos();
-  cargarEvos();
+  } catch (e) { await SB.rest('DELETE', 'evos_lotes', { query: { id: 'eq.' + lote.id } }).catch(() => {}); throw e; }
 }
 
-function skEvos() {
-  $('#evKwh').innerHTML = sk('150px', '44px'); $('#evHeroSub').innerHTML = sk('70%');
-  for (const id of ['#evSes', '#evRatio', '#evImp', '#evPuntos']) $(id).innerHTML = sk('100px', '26px');
-  for (const id of ['#evSesSub', '#evRatioSub', '#evImpSub', '#evDC']) $(id).innerHTML = sk('80%');
-  $('#chEvos').innerHTML = `<div class="sk-cols">${ALTOS.map((h) => `<span class="sk" style="height:${h}%"></span>`).join('')}</div>`;
-  $('#lsEvReg').innerHTML = Array.from({ length: 6 }, (_, i) => `<div class="hb"><span class="n">${sk('70%')}</span><span class="t">${sk([95, 60, 40, 30, 20, 10][i] + '%', '14px')}</span><span class="v">${sk('90px')}</span></div>`).join('');
-  skTabla($('#tbEvPts'), 5, 8);
-}
-async function cargarEvos() {
+// --- tarjeta de evOS en el inicio
+let EVOS = null;
+async function cargarEvosInicio() {
   const anio = ST.anio ?? new Date().getFullYear();
   const clave = 'evos.' + anio, g = LS.get(clave);
-  if (g) pintarEvos(g); else skEvos();
-  cargarLotesEvos();
+  if (g) pintarEvos(g);
   const d = await seguro(() => SB.rpc('evos_dashboard', { p_anio: anio }));
-  if (!d || ST.vista !== 'evos') return;
+  if (!d) return;
   LS.set(clave, d);
-  pintarEvos(d);
+  if ((ST.anio ?? new Date().getFullYear()) === anio) pintarEvos(d);
 }
 function pintarEvos(d) {
   EVOS = d;
+  if (ST.vista !== 'inicio') return;
   const k = d.kpi, hay = +k.sesiones > 0;
-  $('#evVacio').classList.toggle('hide', hay); $('#evPanel').classList.toggle('hide', !hay);
-  if (!hay) {
-    $('#evVacio').querySelector('h2').textContent = d.anios.length ? `No hay datos de evOS de ${d.anio}` : 'Todavía no hay datos de evOS';
-    return;
-  }
-  $('#evHeroLbl').textContent = `Energía entregada según evOS · ${d.anio}`;
-  $('#evKwh').textContent = fN(k.kwh / 1000, 1);
-  $('#evHeroSub').textContent = `Sesiones del ${fFecha(k.desde)} al ${fFecha(k.hasta)}`;
-  $('#evSes').textContent = fN(k.sesiones);
-  $('#evSesSub').textContent = `${fN(k.kwh / k.sesiones, 1)} kWh por sesión · ${fN(k.horas)} h de carga`;
-  // facturado / evOS solo en los meses con ambos datos
+  $('#cardEvos').classList.toggle('hide', !hay);
+  if (!hay) return;
   const comp = d.mensual.filter((m) => m.kwh && m.fact_kwh);
   const kE = comp.reduce((a, m) => a + +m.kwh, 0), kF = comp.reduce((a, m) => a + +m.fact_kwh, 0);
-  $('#evRatio').textContent = comp.length ? fN(kF / kE * 100, 1) + ' %' : '—';
-  $('#evRatioSub').textContent = comp.length ? `${comp.length} ${comp.length === 1 ? 'mes' : 'meses'} con ambos datos` : 'sin meses con facturas y evOS a la vez';
-  $('#evImp').textContent = fEur(k.importe);
-  $('#evImpSub').textContent = k.kwh ? `${fN(k.importe / k.kwh, 3)} €/kWh entregado` : '';
-  $('#evPuntos').textContent = fN(k.puntos);
-  $('#evDC').textContent = `${fN(k.kwh ? k.kwh_dc / k.kwh * 100 : 0, 1)} % de la energía en DC (carga rápida)`;
+  $('#evStats').innerHTML = [
+    ['Energía entregada (evOS)', `${fN(k.kwh / 1000, 1)} MWh`, `del ${fFecha(k.desde)} al ${fFecha(k.hasta)}`],
+    ['Sesiones de carga', fN(k.sesiones), `${fN(k.kwh / k.sesiones, 1)} kWh por sesión`],
+    ['Facturado / entregado', comp.length ? fN(kF / kE * 100, 1) + ' %' : '—', comp.length ? `${comp.length} ${comp.length === 1 ? 'mes' : 'meses'} con ambos datos` : 'sin meses con facturas y evOS a la vez'],
+    ['Puntos de recarga activos', fN(k.puntos), `${fN(k.kwh ? k.kwh_dc / k.kwh * 100 : 0, 1)} % de la energía en DC`],
+  ].map(([t, v, sub]) => `<div><span class="k">${t}</span><span class="v">${v}</span><span class="s">${sub}</span></div>`).join('');
   const meses = d.mensual.map((m) => ({ ...m, label: MESES[m.mes - 1], a: m.fact_kwh == null ? null : +m.fact_kwh, b: m.kwh == null ? null : +m.kwh }));
   groupedChart($('#chEvos'), meses, {
     tipFn: (m) => tipRows(`${m.label} ${d.anio}`, [
       ['Facturado', m.a == null ? 'sin facturas' : fN(m.a) + ' kWh'],
-      ['evOS', m.b == null ? 'sin datos' : fN(m.b) + ' kWh'],
+      ['Entregado (evOS)', m.b == null ? 'sin datos' : fN(m.b) + ' kWh'],
       ['Sesiones', m.sesiones == null ? '—' : fN(m.sesiones)],
-      ['Facturado / evOS', m.a && m.b ? fN(m.a / m.b * 100, 1) + ' %' : '—'],
+      ['Facturado / entregado', m.a && m.b ? fN(m.a / m.b * 100, 1) + ' %' : '—'],
     ]),
   });
-  hbars($('#lsEvReg'), d.regiones.slice(0, 12).map((r) => ({ ...r, label: r.region || 'Sin comunidad', value: +r.kwh })), {
+  hbars($('#lsEvReg'), d.regiones.slice(0, 10).map((r) => ({ ...r, label: r.region || 'Sin comunidad', value: +r.kwh })), {
     fmtV: (r) => `${fN(r.value / 1000, 1)} MWh`,
     tipFn: (r) => tipRows(r.label, [['Energía', fN(r.value) + ' kWh'], ['Sesiones', fN(r.sesiones)], ['Puntos', fN(r.puntos)]]),
   });
-  $('#evPtsTot').textContent = `${fN(Math.min(d.puntos.length, 300))} de ${fN(k.puntos)}`;
-  $('#tbEvPts').classList.remove('loading');
-  $('#tbEvPts').innerHTML = `<thead><tr><th>Punto</th><th>Tipo</th><th class="num">kWh</th><th class="num">Sesiones</th><th class="num">Importe CPO</th></tr></thead><tbody>` +
-    d.puntos.map((p) => `<tr><td title="${esc(p.punto)}"><b>${esc(p.direccion || '—')}</b><br><span class="muted sm">${esc([p.cp, p.ciudad].filter(Boolean).join(' ')) } · nº serie ${esc(p.serial || '—')}</span></td>
-      <td>${esc(p.ac_dc || '')}${p.potencia ? ` · ${fN(p.potencia)} kW` : ''}</td><td class="num">${fN(p.kwh)}</td><td class="num">${fN(p.sesiones)}</td><td class="num">${fEur(p.importe)}</td></tr>`).join('') + '</tbody>';
+}
+
+// --- tabla evOS (mes × punto)
+const E_COLS = [
+  ['mes', 'Mes', 'm'], ['serial', 'Nº serie'], ['direccion', 'Dirección', 'w'], ['cp', 'CP'], ['ciudad', 'Ciudad'], ['provincia', 'Provincia'],
+  ['region', 'Comunidad'], ['ac_dc', 'AC/DC'], ['potencia', 'Potencia kW', 'n'], ['cpo', 'CPO'], ['empresa', 'Empresa'],
+  ['sesiones', 'Sesiones', 'n'], ['kwh', 'kWh', 'n2'], ['importe', 'Importe CPO €', 'n2'], ['segundos', 'Horas de carga', 'h'],
+  ['primera', 'Primera sesión', 't'], ['ultima', 'Última sesión', 't'],
+];
+ST.e = { pag: 1, orden: 'kwh', dir: 'desc' };
+const fHora = (ts) => (ts ? fFecha(ts) + ' ' + ts.slice(11, 16) : '');
+function queryEvos() {
+  const q = { anio: 'eq.' + (ST.anio ?? new Date().getFullYear()) };
+  const t = $('#eQ').value.trim().replace(/[",()]/g, ' ');
+  if (t) q.or = `(${['serial', 'direccion', 'ciudad', 'cp', 'provincia', 'region'].map((c) => `${c}.ilike."*${t}*"`).join(',')})`;
+  q.order = `${ST.e.orden}.${ST.e.dir}.nullslast,punto`;
+  return q;
+}
+function celdaEv(f, k, n) {
+  const v = f[k];
+  if (n === 'm') return `<td>${MESES[f.mes - 1]} ${f.anio}</td>`;
+  if (n === 'w') return `<td class="wrap">${esc(v)}</td>`;
+  if (n === 'n') return `<td class="num">${v == null ? '' : fN(v)}</td>`;
+  if (n === 'n2') return `<td class="num">${v == null ? '' : fN(v, 2)}</td>`;
+  if (n === 'h') return `<td class="num">${fN(v / 3600, 1)}</td>`;
+  if (n === 't') return `<td>${fHora(v)}</td>`;
+  return `<td>${esc(v)}</td>`;
+}
+async function cargarEvAgg() {
+  const tb = $('#tbEvAgg'); skTabla(tb, 12);
+  const q = { ...queryEvos(), select: 'anio,' + E_COLS.map((c) => c[0]).join(','), limit: 50, offset: (ST.e.pag - 1) * 50 };
+  const r = await seguro(() => SB.select('evos_agg', q, { count: true }));
+  tb.classList.remove('loading');
+  if (!r) return;
+  tb.innerHTML = `<thead><tr>${E_COLS.map(([k, t, n]) => `<th data-c="${k}" class="${n && n !== 'w' && n !== 'm' && n !== 't' ? 'num' : ''}">${t}${ST.e.orden === k ? `<span class="ar">${ST.e.dir === 'desc' ? '↓' : '↑'}</span>` : ''}</th>`).join('')}</tr></thead><tbody>` +
+    (r.datos.length ? r.datos.map((f) => `<tr>${E_COLS.map(([k, , n]) => celdaEv(f, k, n)).join('')}</tr>`).join('')
+      : `<tr><td colspan="${E_COLS.length}" class="muted">No hay datos de evOS para ${ST.anio ?? ''}. Súbelos en «Cargar datos».</td></tr>`) + '</tbody>';
+  tb.querySelectorAll('th').forEach((th) => th.onclick = () => {
+    const c = th.dataset.c; ST.e.dir = ST.e.orden === c && ST.e.dir === 'desc' ? 'asc' : 'desc'; ST.e.orden = c; ST.e.pag = 1; cargarEvAgg();
+  });
+  $('#eTotal').textContent = `${fN(r.total)} filas`;
+  const np = Math.max(1, Math.ceil(r.total / 50));
+  $('#ePager').innerHTML = `<button class="btn" ${ST.e.pag <= 1 ? 'disabled' : ''} data-p="${ST.e.pag - 1}">‹ Anterior</button>
+    <span>Página ${ST.e.pag} de ${np}</span>
+    <button class="btn" ${ST.e.pag >= np ? 'disabled' : ''} data-p="${ST.e.pag + 1}">Siguiente ›</button>`;
+  $$('#ePager button').forEach((b) => b.onclick = () => { ST.e.pag = +b.dataset.p; cargarEvAgg(); });
+}
+const tsASerial = (ts) => (ts ? isoASerial(ts.slice(0, 10)) + ((+ts.slice(11, 13) || 0) * 3600 + (+ts.slice(14, 16) || 0) * 60) / 86400 : null);
+function hojaFechaHora(aoa, cols) {
+  const ws = hoja(aoa, []);
+  for (let r = 1; r < aoa.length; r++) for (const c of cols) { const cell = ws[XLSX.utils.encode_cell({ r, c })]; if (cell && cell.t === 'n') cell.z = 'dd/mm/yyyy hh:mm'; }
+  return ws;
+}
+async function exportarEvAgg(e) {
+  const bt = e.currentTarget, txt = bt.textContent; bt.disabled = true;
+  try {
+    const q = { ...queryEvos(), select: 'anio,' + E_COLS.map((c) => c[0]).join(',') };
+    const filas = await SB.todo((limit, offset) => SB.select('evos_agg', { ...q, limit, offset }), (n) => { bt.textContent = `Descargando… ${fN(n)}`; });
+    const aoa = [E_COLS.map((c) => c[1])].concat(filas.map((f) => E_COLS.map(([k, , n]) =>
+      n === 'm' ? `${f.anio}-${pad(f.mes)}` : n === 't' ? tsASerial(f[k]) : n === 'h' ? Math.round(f[k] / 36) / 100 : (n ? (f[k] == null ? null : +f[k]) : f[k]))));
+    descargar(hojaFechaHora(aoa, E_COLS.map((c, i) => (c[2] === 't' ? i : -1)).filter((i) => i >= 0)), 'evOS', `evos_${ST.anio ?? ''}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  } catch (err) { if (err.message === 'sin_sesion') mostrarLogin(); else toast('Error al exportar: ' + err.message, 6000); }
+  finally { bt.textContent = txt; bt.disabled = false; }
+}
+
+// --- tabla de puntos de recarga (evOS)
+const U_COLS = [
+  ['serial', 'Nº serie'], ['direccion', 'Dirección', 'w'], ['cp', 'CP'], ['ciudad', 'Ciudad'], ['provincia', 'Provincia'], ['region', 'Comunidad'],
+  ['ac_dc', 'AC/DC'], ['potencia', 'Potencia kW', 'n'], ['cups', 'CUPS'], ['meses', 'Meses activos', 'n'],
+  ['sesiones', 'Sesiones', 'n'], ['kwh', 'kWh', 'n2'], ['kwh_ses', 'kWh/sesión', 'n1'], ['importe', 'Importe CPO €', 'n2'], ['horas', 'Horas de carga', 'n1'],
+  ['primera', 'Primera sesión', 't'], ['ultima', 'Última sesión', 't'],
+];
+ST.u = { orden: 'kwh', dir: 'desc' };
+let EVP = { clave: null, filas: [] };
+async function datosPuntosEv() {
+  const anio = ST.anio ?? new Date().getFullYear();
+  if (EVP.clave !== anio) {
+    const filas = (await SB.rpc('evos_puntos', { p_anio: anio })) || [];
+    for (const f of filas) { f.kwh_ses = f.sesiones ? f.kwh / f.sesiones : null; f.cups = null; }
+    EVP = { clave: anio, filas };
+  }
+  return EVP.filas;
+}
+function puntosEvFiltrados(todos) {
+  const q = $('#uQ').value.trim().toLowerCase();
+  const r = q ? todos.filter((p) => ['serial', 'direccion', 'cp', 'ciudad', 'provincia', 'region'].some((k) => String(p[k] ?? '').toLowerCase().includes(q))) : [...todos];
+  const k = ST.u.orden, s = ST.u.dir === 'asc' ? 1 : -1;
+  r.sort((a, b) => (a[k] == null) - (b[k] == null) || (typeof a[k] === 'string' ? String(a[k]).localeCompare(b[k]) : a[k] - b[k]) * s);
+  return r;
+}
+async function cargarPuntosEv() {
+  const tb = $('#tbPuntosEv'); skTabla(tb, 12);
+  const todos = await seguro(datosPuntosEv);
+  tb.classList.remove('loading');
+  if (!todos) return;
+  const filas = puntosEvFiltrados(todos), vis = filas.slice(0, 500);
+  const max = Math.max(...filas.map((f) => +f.kwh || 0), 1);
+  tb.innerHTML = `<thead><tr>${U_COLS.map(([k, t, n]) => `<th data-c="${k}" class="${n && n !== 'w' && n !== 't' ? 'num' : ''}">${t}${ST.u.orden === k ? `<span class="ar">${ST.u.dir === 'desc' ? '↓' : '↑'}</span>` : ''}</th>`).join('')}</tr></thead><tbody>` +
+    (vis.length ? vis.map((f) => `<tr>${U_COLS.map(([k, , n]) => {
+      const v = f[k];
+      if (k === 'kwh') return `<td class="num"><span class="inbar" style="width:${Math.max(0, (v / max) * 60)}px"></span>${fN(v)}</td>`;
+      if (k === 'cups') return `<td class="muted sm">pendiente</td>`;
+      if (n === 'w') return `<td class="wrap">${esc(v)}</td>`;
+      if (n === 'n') return `<td class="num">${fN(v)}</td>`;
+      if (n === 'n1') return `<td class="num">${fN(v, 1)}</td>`;
+      if (n === 'n2') return `<td class="num">${fN(v, 2)}</td>`;
+      if (n === 't') return `<td>${fHora(v)}</td>`;
+      return `<td>${esc(v)}</td>`;
+    }).join('')}</tr>`).join('') : `<tr><td colspan="${U_COLS.length}" class="muted">No hay datos de evOS para ${ST.anio ?? ''}. Súbelos en «Cargar datos».</td></tr>`) + '</tbody>';
+  tb.querySelectorAll('th').forEach((th) => th.onclick = () => {
+    const c = th.dataset.c; ST.u.dir = ST.u.orden === c && ST.u.dir === 'desc' ? 'asc' : 'desc'; ST.u.orden = c; cargarPuntosEv();
+  });
+  $('#uTotal').textContent = filas.length > vis.length ? `${fN(filas.length)} puntos (se muestran ${vis.length}; exporta para verlos todos)` : `${fN(filas.length)} puntos`;
+}
+async function exportarPuntosEv() {
+  const todos = await seguro(datosPuntosEv); if (!todos) return;
+  const aoa = [U_COLS.map((c) => c[1])].concat(puntosEvFiltrados(todos).map((f) => U_COLS.map(([k, , n]) =>
+    n === 't' ? tsASerial(f[k]) : (n && n !== 'w' ? (f[k] == null ? null : +f[k]) : f[k]))));
+  descargar(hojaFechaHora(aoa, U_COLS.map((c, i) => (c[2] === 't' ? i : -1)).filter((i) => i >= 0)), 'Puntos', `puntos_recarga_${ST.anio ?? ''}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+// --- pantalla de carga: lo guardado de cada tipo
+function cargarDatosCargar() {
+  cargarCargas(); cargarLotesEvos(); cargarHistorialAna();
+  seguro(datosComp).then((d) => d && pintarAnaEstado(d));
 }
 async function cargarLotesEvos() {
-  const l = await seguro(() => SB.select('evos_lotes', { select: 'id,archivo,desde,hasta,sesiones,kwh,fecha,usuario_email', order: 'desde.desc', limit: 500 }));
+  const l = await seguro(() => SB.select('evos_lotes', { select: 'id,archivo,desde,hasta,sesiones,kwh,fecha,usuario_email', order: 'desde.desc', limit: 1000 }));
   if (!l) return;
-  $('#tbEvLotes').innerHTML = `<thead><tr><th>Fichero</th><th>Días</th><th class="num">Sesiones</th><th class="num">kWh</th>${ST.admin ? '<th></th>' : ''}</tr></thead><tbody>` +
-    (l.length ? l.map((x) => `<tr><td class="wrap" style="min-width:0" title="Subido ${esc(fFechaHora(x.fecha))} por ${esc(x.usuario_email || '')}">${esc(x.archivo)}</td><td class="wrap" style="min-width:0">${fFecha(x.desde).slice(0, 5)} – ${fFecha(x.hasta)}</td>
-      <td class="num">${fN(x.sesiones)}</td><td class="num">${fN(x.kwh)}</td>${ST.admin ? `<td><button class="btn sm danger" data-borrar="${x.id}" title="Borrar este fichero">Borrar</button></td>` : ''}</tr>`).join('')
-      : `<tr><td colspan="5" class="muted">Ningún fichero cargado todavía</td></tr>`) + '</tbody>';
+  const ses = l.reduce((a, x) => a + (+x.sesiones || 0), 0);
+  $('#dEvFich').textContent = fN(l.length); $('#dEvSes').textContent = fN(ses);
+  $('#dEvRango').textContent = l.length ? `${fFecha(l.at(-1).desde)} – ${fFecha(l[0].hasta)}` : '—';
+  $('#evLotesTot').textContent = l.length ? `${fN(l.length)} ficheros` : '';
+  $('#tbEvLotes').innerHTML = `<thead><tr><th>Fichero</th><th>Días</th><th class="num">Sesiones</th><th class="num">kWh</th><th>Subido</th>${ST.admin ? '<th></th>' : ''}</tr></thead><tbody>` +
+    (l.length ? l.map((x) => `<tr><td>${esc(x.archivo)}</td><td>${fFecha(x.desde)} – ${fFecha(x.hasta)}</td>
+      <td class="num">${fN(x.sesiones)}</td><td class="num">${fN(x.kwh)}</td><td class="muted sm">${fFechaHora(x.fecha)}${x.usuario_email ? ' · ' + esc(x.usuario_email) : ''}</td>${ST.admin ? `<td><button class="btn mini danger" data-borrar="${x.id}">Borrar</button></td>` : ''}</tr>`).join('')
+      : `<tr><td colspan="6" class="muted">Ningún fichero de evOS cargado todavía</td></tr>`) + '</tbody>';
   $$('#tbEvLotes [data-borrar]').forEach((bt) => bt.onclick = async () => {
+    if (bt.dataset.ok !== '1') { bt.dataset.ok = '1'; bt.textContent = '¿Seguro?'; setTimeout(() => { bt.dataset.ok = ''; bt.textContent = 'Borrar'; }, 3000); return; }
     bt.disabled = true;
     const ok = await seguro(() => SB.rest('DELETE', 'evos_lotes', { query: { id: 'eq.' + bt.dataset.borrar, select: 'id' }, prefer: 'return=representation' }));
-    if (ok?.length) { toast('Fichero de evOS borrado'); cargarEvos(); } else { if (ok) toast('No tienes permiso para borrar.'); bt.disabled = false; }
+    if (ok?.length) { toast('Fichero de evOS borrado'); datosCambiados(); cargarLotesEvos(); } else { if (ok) toast('No tienes permiso para borrar.'); bt.disabled = false; }
   });
 }
 
 // ---------------------------------------------------------------- navegación y filtros
 const TITULOS = {
   inicio: ['Inicio', 'Resumen de consumo y coste de la red de recarga'],
-  facturas: ['Facturas', 'Todas las líneas de factura unificadas, sin duplicados'],
-  cups: ['CUPS', 'Consumo y coste agregados por CUPS (un CUPS puede agrupar varios puntos de recarga)'],
-  evos: ['evOS', 'Sesiones de carga registradas en evOS frente a lo facturado'],
-  comparativa: ['Comparativa', 'Facturas frente al analítico que monta el equipo'],
+  tablas: ['Tablas', ''],
+  cargar: ['Cargar datos', 'Facturas de Endesa, ficheros de evOS y analítico del equipo, en un solo sitio'],
   correcciones: ['Correcciones', 'Reglas para corregir cómo cuentan algunas facturas'],
-  cargar: ['Cargar datos', 'Sube Excels, carpetas o ZIPs de facturación agrupada'],
 };
+const TABS = {
+  bt: 'Líneas de factura de baja tensión (tarifas 2.0TD / 3.0TD), sin duplicados',
+  mt: 'Líneas de factura de media tensión (tarifas 6.x), sin duplicados',
+  cups: 'Consumo y coste agregados por CUPS (un CUPS puede agrupar varios puntos de recarga)',
+  evos: 'Sesiones de evOS sumadas por mes y punto de carga',
+  puntos: 'Puntos de recarga según evOS (por número de serie)',
+  analitico: 'Facturas frente al analítico que monta el equipo',
+};
+// enlaces antiguos -> nueva estructura
+const ALIAS = { facturas: 'tablas/bt', cups: 'tablas/cups', puntos: 'tablas/cups', comparativa: 'tablas/analitico', evos: 'tablas/evos', cruce: 'tablas/evos' };
+ST.tab = 'bt';
 function irA(v) { mostrarVista(v); refrescar(); }
 function mostrarVista(v) {
-  if (v === 'puntos') v = 'cups';
-  if (v === 'cruce') v = 'evos';
-  if (!TITULOS[v]) v = 'inicio';
-  ST.vista = v;
-  $$('nav a').forEach((a) => a.classList.toggle('on', a.dataset.v === v));
-  $$('.vista').forEach((s) => s.classList.toggle('hide', s.id !== 'v-' + v));
-  $('#titulo').textContent = TITULOS[v][0]; $('#subtitulo').textContent = TITULOS[v][1];
-  $('#filtros').classList.toggle('hide', !['inicio', 'facturas', 'cups', 'comparativa', 'evos'].includes(v));
-  $('#segBase').classList.toggle('hide', ['comparativa', 'evos'].includes(v));
-  $('#segTension').classList.toggle('hide', ['comparativa', 'evos'].includes(v));   // la comparativa es siempre BT   // la comparativa va siempre por mes de consumo
-  if (v === 'inicio') skDashboard();
+  v = ALIAS[v] || v || 'inicio';
+  let [vista, tab] = v.split('/');
+  if (!TITULOS[vista]) vista = 'inicio';
+  if (vista === 'tablas') { ST.tab = TABS[tab] ? tab : ST.tab; if (location.hash.slice(1) !== 'tablas/' + ST.tab) history.replaceState(null, '', '#tablas/' + ST.tab); }
+  ST.vista = vista;
+  $$('nav a').forEach((a) => a.classList.toggle('on', a.dataset.v === vista));
+  $$('.vista').forEach((s) => s.classList.toggle('hide', s.id !== 'v-' + vista));
+  $('#titulo').textContent = TITULOS[vista][0];
+  $('#subtitulo').textContent = vista === 'tablas' ? TABS[ST.tab] : TITULOS[vista][1];
+  if (vista === 'tablas') {
+    $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === ST.tab));
+    $$('#v-tablas .pane').forEach((p) => p.classList.toggle('hide', !p.dataset.p.split(' ').includes(ST.tab)));
+  }
+  // filtros de arriba según lo que se ve
+  const conFact = vista === 'inicio' || (vista === 'tablas' && ['bt', 'mt', 'cups'].includes(ST.tab));
+  $('#filtros').classList.toggle('hide', !['inicio', 'tablas'].includes(vista));
+  $('#segBase').classList.toggle('hide', !conFact);
+  $('#segTension').classList.toggle('hide', !(vista === 'inicio' || (vista === 'tablas' && ST.tab === 'cups')));
+  if (vista === 'inicio') skDashboard();
 }
 function refrescar() {
   if (ST.vista === 'inicio') cargarDashboard();
-  else if (ST.vista === 'facturas') cargarFacturas();
-  else if (ST.vista === 'cups') cargarPuntos();
-  else if (ST.vista === 'cargar') cargarCargas();
+  else if (ST.vista === 'cargar') cargarDatosCargar();
   else if (ST.vista === 'correcciones') cargarCorrecciones();
-  else if (ST.vista === 'comparativa') cargarComparativa();
-  else if (ST.vista === 'evos') cargarEvos();
+  else if (ST.vista === 'tablas') {
+    if (ST.tab === 'bt' || ST.tab === 'mt') cargarFacturas();
+    else if (ST.tab === 'cups') cargarPuntos();
+    else if (ST.tab === 'evos') cargarEvAgg();
+    else if (ST.tab === 'puntos') cargarPuntosEv();
+    else if (ST.tab === 'analitico') cargarComparativa();
+  }
 }
 async function refrescarAnios() {
   const claveA = `anios.${ST.base}.${ST.tension}`;
@@ -1144,7 +1249,6 @@ function init() {
   $('#btnSalir').onclick = async () => { await SB.logout(); mostrarLogin(); };
 
   // comparativa
-  $('#anaFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) subirAnalitico(f); };
 
   // correcciones y actualizar
   $('#fRegla').onsubmit = guardarRegla;
@@ -1173,7 +1277,7 @@ function init() {
   $('#fQ').oninput = deb(() => { ST.f.pag = 1; cargarFacturas(); });
   $('#fEstado').onchange = $('#fTodas').onchange = () => { ST.f.pag = 1; cargarFacturas(); };
   $('#pQ').oninput = deb(cargarPuntos);
-  $('#fExport').onclick = (e) => exportarFilas(queryFacturas(), 'facturas', e.currentTarget);
+  $('#fExport').onclick = (e) => exportarFilas(queryFacturas(), 'facturas_' + (tensionFact() || 'todas'), e.currentTarget);
   $('#pExport').onclick = exportarPuntos;
   $('#btnExportAll').onclick = (e) => exportarFilas({ order: 'fecha_emision.asc.nullslast,huella' }, 'facturas_unificadas', e.currentTarget);
 
@@ -1195,14 +1299,12 @@ function init() {
     for (const en of items) await walk(en, '');
     encolar(acc);
   });
-  // evOS
-  $('#evFiles').onchange = (e) => { encolarEvos(e.target.files); e.target.value = ''; };
-  $('#evLimpiar').onclick = () => { EVCOLA = []; pintarColaEvos(); $('#evLog').classList.add('hide'); $('#evProgreso').classList.add('hide'); };
-  $('#evProcesar').onclick = procesarEvos;
-  const de = $('#evDrop');
-  ['dragenter', 'dragover'].forEach((ev) => de.addEventListener(ev, (e) => { e.preventDefault(); de.classList.add('on'); }));
-  ['dragleave', 'drop'].forEach((ev) => de.addEventListener(ev, (e) => { e.preventDefault(); de.classList.remove('on'); }));
-  de.addEventListener('drop', (e) => encolarEvos(e.dataTransfer.files));
+  // tablas
+  $$('#tabs button').forEach((b) => b.onclick = () => { location.hash = 'tablas/' + b.dataset.t; });
+  $('#eQ').oninput = deb(() => { ST.e.pag = 1; cargarEvAgg(); });
+  $('#eExport').onclick = exportarEvAgg;
+  $('#uQ').oninput = deb(cargarPuntosEv);
+  $('#uExport').onclick = exportarPuntosEv;
   // vaciar
   $('#btnVaciar').onclick = () => $('#modal').classList.remove('hide');
   $('#mNo').onclick = () => $('#modal').classList.add('hide');
@@ -1210,13 +1312,13 @@ function init() {
     const ok = await seguro(() => SB.rpc('vaciar'));
     $('#modal').classList.add('hide');
     if (ok !== null) { PUNTOS.clave = null; CABS = null; toast('Datos vaciados'); }
-    await refrescarAnios(); cargarCargas();
+    await refrescarAnios(); cargarDatosCargar();
   };
 
   let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => {
     if (ST.vista === 'inicio' && DASH && !DASH.vacio) pintarDashboard();
-    if (ST.vista === 'comparativa' && COMP?.carga) cargarComparativa();
-    if (ST.vista === 'evos' && EVOS) pintarEvos(EVOS);
+    if (ST.vista === 'inicio' && EVOS) pintarEvos(EVOS);
+    if (ST.vista === 'tablas' && ST.tab === 'analitico' && COMP?.carga) cargarComparativa();
   }, 150); });
   addEventListener('hashchange', () => { if (!$('#appRoot').classList.contains('hide')) irA(location.hash.slice(1)); });
 
