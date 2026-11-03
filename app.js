@@ -141,7 +141,7 @@ function barraSvg(svg, y, x0, bw, v, cls) {
   const p = svgEl('path', { d, class: cls }); svg.append(p); return p;
 }
 
-function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn, prev, desdeCero = false, puntos = true }) {
+function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn, prev, desdeCero = false, puntos = true, onClick }) {
   if (el.clientWidth < 80) return;
   const vals = data.map((d) => d.value).concat(prev || []).filter((v) => v != null);
   if (!vals.length) { el.innerHTML = '<p class="muted sm">Sin datos</p>'; return; }
@@ -179,6 +179,7 @@ function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn, prev, desdeCero =
     const hit = svgEl('rect', { x: X(i) - band / 2, y: m.t, width: band, height: H - m.t - m.b, fill: 'transparent' });
     hit.addEventListener('mousemove', (e) => { xh.setAttribute('x1', X(i)); xh.setAttribute('x2', X(i)); xh.setAttribute('visibility', 'visible'); showTip(e, tipFn(d)); });
     hit.addEventListener('mouseleave', () => { xh.setAttribute('visibility', 'hidden'); hideTip(); });
+    if (onClick) { hit.style.cursor = 'pointer'; hit.addEventListener('click', () => { hideTip(); onClick(d); }); }
     svg.append(hit);
   });
 }
@@ -500,7 +501,7 @@ async function exportarPuntos() {
 }
 
 // ---------------------------------------------------------------- COMPARATIVA (analítico del equipo)
-function groupedChart(el, data, { fmtAxis = fComp, tipFn }) {
+function groupedChart(el, data, { fmtAxis = fComp, tipFn, onClick }) {
   if (el.clientWidth < 80) return;
   const vals = data.flatMap((d) => [d.a, d.b, d.g]).filter((v) => v != null);
   const { svg, W, H, m, y } = frame(el, vals.length ? vals : [0], fmtAxis);
@@ -520,6 +521,7 @@ function groupedChart(el, data, { fmtAxis = fComp, tipFn }) {
     const hit = svgEl('rect', { x: cx - band / 2, y: m.t, width: band, height: H - m.t - m.b, fill: 'transparent' });
     hit.addEventListener('mousemove', (e) => { el.classList.add('hovering'); pa?.classList.add('hl'); pb?.classList.add('hl'); showTip(e, tipFn(d)); });
     hit.addEventListener('mouseleave', () => { el.classList.remove('hovering'); pa?.classList.remove('hl'); pb?.classList.remove('hl'); hideTip(); });
+    if (onClick) { hit.style.cursor = 'pointer'; hit.addEventListener('click', () => { hideTip(); onClick(d); }); }
     svg.append(hit);
   });
 }
@@ -753,7 +755,7 @@ async function guardarRegla(e) {
   datosCambiados(); await cargarCorrecciones(); toast('Corrección guardada y aplicada');
 }
 /** Tras cambiar datos o correcciones: olvidar cachés y recalcular lo visible */
-function datosCambiados() { PUNTOS.clave = null; DASH = null; COMP_FRESCO = null; EVP = { clave: null, filas: [] }; CRUCE = null; }
+function datosCambiados() { PUNTOS.clave = null; DASH = null; COMP_FRESCO = null; EVP = { clave: null, filas: [] }; CRUCE = null; CRUCE_T = null; }
 
 // ---------------------------------------------------------------- CARGAR
 const OK = /\.(xlsx|xlsm|xls|csv|zip)$/i;
@@ -932,10 +934,10 @@ const skCols = () => `<div class="sk-cols">${ALTOS.map((h) => `<span class="sk" 
 function skEvos(tab) {
   if (tab === 'general') {
     for (const id of ['#gDif']) $(id).innerHTML = sk('140px', '44px');
-    for (const id of ['#gFact', '#gEvos', '#gCoste', '#gIngreso']) $(id).innerHTML = sk('100px', '26px');
-    for (const id of ['#gMeses', '#gCosteSub', '#gIngresoSub']) $(id).innerHTML = sk('80%');
+    for (const id of ['#gFact', '#gEvos', '#gCoste', '#gCups']) $(id).innerHTML = sk('100px', '26px');
+    for (const id of ['#gMeses', '#gCosteSub', '#gCupsSub']) $(id).innerHTML = sk('80%');
     $('#gDifPct').innerHTML = '';
-    for (const id of ['#chGen', '#chGenEur']) $(id).innerHTML = skCols();
+    $('#chGen').innerHTML = skCols();
     $('#chGenPct').innerHTML = `<div class="sk-line"><span class="sk"></span><span class="sk onda"></span><span class="sk"></span><span class="sk"></span></div>`;
     $('#lsAvisos').innerHTML = Array.from({ length: 4 }, () => `<li>${sk('85%')}</li>`).join('');
   } else {
@@ -982,19 +984,22 @@ function mesesGenerales(d) {
     const F = c ? n(x.f_per) : n(m.pro_kwh), E = c ? n(x.e_per) : n(m.kwh);
     const completo = m.dias >= m.dias_mes, comparable = completo && F > 0 && E > 0;
     return { ...m, x, label: MESES[m.mes - 1], F, E, a: F, b: E, completo, comparable, dif: comparable ? (F - E) / F * 100 : null,
-      cN: c ? n(x.f_neto_per) : n(m.pro_neto), cI: c ? n(x.e_imp_per) : n(m.importe) };
+      cN: c ? n(x.f_neto_per) : n(m.pro_neto) };
   });
 }
 /** Qué parte de cada lado entra en la comparación (meses comparables). */
 function pintarCobertura(d, meses) {
   const c = conCruce(d) ? CRUCE : null;
   if (!c) {
+    $('#gCups').textContent = '—'; $('#gCupsSub').textContent = 'falta el fichero de cruce';
     $('#cobCruce').textContent = '';
     $('#lsCob').innerHTML = '<p class="muted">Sube el fichero de cruce (nº de serie → CUPS) en «Cargar datos» para comparar solo los CUPS que factura Endesa y tienen puntos en evOS. Mientras tanto se compara todo evOS con todas las facturas.</p>';
     $('#tbCupsTop').innerHTML = '<tbody><tr><td class="muted">Hace falta el fichero de cruce.</td></tr></tbody>';
     return;
   }
   $('#cobCruce').textContent = `${c.cruce.archivo} · ${fN(c.n.per)} CUPS en el perímetro`;
+  $('#gCups').textContent = fN(c.n.per);
+  $('#gCupsSub').textContent = `de ${fN(c.n.fcups)} CUPS facturados · ${fN(c.n.ecups)} con puntos en evOS`;
   const comp = meses.filter((m) => m.comparable);
   const S = (k) => comp.reduce((a, m) => a + (+m.x[k] || 0), 0);
   const Et = S('e_tot'), Ep = S('e_per'), En = S('e_nofact'), Es = S('e_sin'), Er = S('e_rec'), Ft = S('f_tot'), Fp = S('f_per');
@@ -1010,8 +1015,9 @@ function pintarCobertura(d, meses) {
   // CUPS con más diferencia
   const top = c.cups.map((x) => ({ ...x, dif: (+x.f_kwh || 0) - (+x.e_kwh || 0) })).sort((a, b) => Math.abs(b.dif) - Math.abs(a.dif)).slice(0, 10);
   $('#tbCupsTop').innerHTML = `<thead><tr><th>CUPS · dirección</th><th class="num">Puntos</th><th class="num">Facturado</th><th class="num">Entregado</th><th class="num">Diferencia</th></tr></thead><tbody>` +
-    top.map((x) => `<tr><td class="wrap"><span class="cups">${esc(x.cups || x.cups20)}</span><br>${esc(x.direccion || '')}</td><td class="num">${fN(x.puntos)}</td><td class="num">${fN(x.f_kwh)}</td><td class="num">${fN(x.e_kwh)}</td>
+    top.map((x) => `<tr class="clic" data-cups="${esc(x.cups20)}"><td class="wrap"><span class="cups">${esc(x.cups || x.cups20)}</span><br>${esc(x.direccion || '')}</td><td class="num">${fN(x.puntos)}</td><td class="num">${fN(x.f_kwh)}</td><td class="num">${fN(x.e_kwh)}</td>
       <td class="num">${desv(x.f_kwh ? x.dif / x.f_kwh * 100 : null, 25)}<br><span class="muted sm">${fN(x.dif)} kWh</span></td></tr>`).join('') + '</tbody>';
+  $$('#tbCupsTop tr.clic').forEach((tr) => tr.onclick = () => abrirDetalle(tr.dataset.cups, null));
 }
 function pintarGeneral(d) {
   const meses = mesesGenerales(d), comp = meses.filter((m) => m.comparable);
@@ -1022,7 +1028,7 @@ function pintarGeneral(d) {
     return;
   }
   const sum = (k) => comp.reduce((a, m) => a + (m[k] || 0), 0);
-  const F = sum('F'), E = sum('E'), N = sum('cN'), I = sum('cI');
+  const F = sum('F'), E = sum('E'), N = sum('cN');
   if (comp.length) {
     // siempre en positivo y con la etiqueta que toca: o sobra factura o sobra energía entregada
     const mas = F >= E;
@@ -1033,13 +1039,11 @@ function pintarGeneral(d) {
     $('#gMeses').textContent = `${comp.length} ${comp.length === 1 ? 'mes comparable' : 'meses comparables'}: ${comp.map((m) => m.label).join(', ')}`;
     $('#gFact').textContent = fN(F / 1000, 1); $('#gEvos').textContent = fN(E / 1000, 1);
     $('#gCoste').textContent = fN(N / E, 3) + ' €'; $('#gCosteSub').textContent = `por kWh entregado · ${fN(N / F, 3)} € por kWh facturado`;
-    $('#gIngreso').textContent = fN(I / N * 100, 0) + ' %';
-    $('#gIngresoSub').textContent = `${fEur(I)} cobrados frente a ${fEur(N)} facturados`;
   } else {
     $('#gDif').textContent = '—'; $('#gDifPct').innerHTML = '';
     $('#gMeses').textContent = 'Aún no hay ningún mes con evOS completo y facturas';
-    for (const id of ['#gFact', '#gEvos', '#gCoste', '#gIngreso']) $(id).textContent = '—';
-    $('#gCosteSub').textContent = ''; $('#gIngresoSub').textContent = '';
+    for (const id of ['#gFact', '#gEvos', '#gCoste']) $(id).textContent = '—';
+    $('#gCosteSub').textContent = '';
   }
   pintarCobertura(d, meses);
   const tip = (m) => tipRows(`${m.label} ${d.anio}`, [
@@ -1048,19 +1052,16 @@ function pintarGeneral(d) {
     ['Días con evOS', `${m.dias} de ${m.dias_mes}`],
     ['Diferencia', m.comparable ? `${fN(m.F - m.E)} kWh · ${fN(m.dif, 1)} %` : m.F && m.E ? 'mes incompleto en evOS' : '—'],
   ]);
-  groupedChart($('#chGen'), meses, { tipFn: tip });
-  lineChart($('#chGenPct'), meses.map((m) => ({ ...m, value: m.dif })), { fmtAxis: (v) => fN(v, 0) + ' %', fmtEnd: (v) => fN(v, 1) + ' %', tipFn: tip });
-  groupedChart($('#chGenEur'), meses.map((m) => ({ ...m, a: m.cN, b: m.cI })), {
-    tipFn: (m) => tipRows(`${m.label} ${d.anio}`, [['Coste facturado', m.cN == null ? '—' : fEur(m.cN)], ['Ingreso CPO', m.cI == null ? '—' : fEur(m.cI)],
-      ['Días con evOS', `${m.dias} de ${m.dias_mes}`], ['Ingreso / coste', m.cN && m.cI && m.completo ? fN(m.cI / m.cN * 100, 0) + ' %' : '—']]),
-  });
+  const irMes = (m) => { if (conCruce(d) && (m.F || m.E)) irACruce(m.mes); };
+  groupedChart($('#chGen'), meses, { tipFn: tip, onClick: conCruce(d) ? irMes : null });
+  lineChart($('#chGenPct'), meses.map((m) => ({ ...m, value: m.dif })), { fmtAxis: (v) => fN(v, 0) + ' %', fmtEnd: (v) => fN(v, 1) + ' %', tipFn: tip, onClick: conCruce(d) ? irMes : null });
   // avisos
   const media = comp.length ? comp.reduce((a, m) => a + m.dif, 0) / comp.length : null;
   const av = [];
   const bajo = comp.filter((m) => m.dif < 0);
   if (bajo.length > 2) av.push(['alta', `En <b>${bajo.length} de ${comp.length}</b> meses comparables evOS entrega <b>más</b> energía de la facturada (de ${fN(-Math.max(...bajo.map((m) => m.dif)), 0)} % a ${fN(-Math.min(...bajo.map((m) => m.dif)), 0)} % más). Lo normal sería lo contrario: probablemente faltan facturas o evOS incluye puntos que no factura Endesa.`]);
   for (const m of meses) {
-    const n = `<b>${m.label}</b>`;
+    const n = conCruce(d) && (m.F || m.E) ? `<a href="#tablas/cruce/${m.mes}"><b>${m.label}</b></a>` : `<b>${m.label}</b>`;
     if (bajo.length > 2 && m.dif < 0) { /* ya avisado arriba */ }
     else if (m.comparable && m.dif < 0) av.push(['alta', `${n}: se factura <b>menos</b> de lo entregado (${fN(m.dif, 1)} %). Puede faltar alguna factura.`]);
     else if (m.comparable && media != null && comp.length > 2 && m.dif > media + 10) av.push(['alta', `${n}: diferencia del ${fN(m.dif, 1)} %, muy por encima de la media del año (${fN(media, 1)} %).`]);
@@ -1095,19 +1096,19 @@ function pintarEvosTab(d) {
     fmtV: (r) => `${fN(r.value / 1000, 1)} MWh`, tipFn: (r) => tipRows(r.label, [['Energía', fN(r.value) + ' kWh'], ['Sesiones', fN(r.sesiones)], ['Puntos', fN(r.puntos)]]),
   });
   hbars($('#lsEvCpo'), d.cpos.slice(0, 8).map((r) => ({ ...r, label: r.cpo || 'Sin CPO', value: +r.kwh })), {
-    fmtV: (r) => `${fN(r.value / 1000, 1)} MWh`, tipFn: (r) => tipRows(r.label, [['Energía', fN(r.value) + ' kWh'], ['Sesiones', fN(r.sesiones)], ['Puntos', fN(r.puntos)], ['Importe CPO', fEur(r.importe)]]),
+    fmtV: (r) => `${fN(r.value / 1000, 1)} MWh`, tipFn: (r) => tipRows(r.label, [['Energía', fN(r.value) + ' kWh'], ['Sesiones', fN(r.sesiones)], ['Puntos', fN(r.puntos)]]),
   });
   $('#tbEvTop').classList.remove('loading');
-  $('#tbEvTop').innerHTML = `<thead><tr><th>Punto</th><th>Tipo</th><th class="num">kWh</th><th class="num">Sesiones</th><th class="num">kWh/sesión</th><th class="num">Importe CPO</th></tr></thead><tbody>` +
+  $('#tbEvTop').innerHTML = `<thead><tr><th>Punto</th><th>Tipo</th><th class="num">kWh</th><th class="num">Sesiones</th><th class="num">kWh/sesión</th></tr></thead><tbody>` +
     d.puntos.map((p) => `<tr><td class="wrap"><b>${esc(p.direccion || '—')}</b><br><span class="muted sm">${esc([p.cp, p.ciudad].filter(Boolean).join(' '))} · nº serie ${esc(p.serial || '—')}</span></td>
-      <td>${esc(p.ac_dc || '')}${p.potencia ? ` · ${fN(p.potencia)} kW` : ''}</td><td class="num">${fN(p.kwh)}</td><td class="num">${fN(p.sesiones)}</td><td class="num">${fN(p.kwh / p.sesiones, 1)}</td><td class="num">${fEur(p.importe)}</td></tr>`).join('') + '</tbody>';
+      <td>${esc(p.ac_dc || '')}${p.potencia ? ` · ${fN(p.potencia)} kW` : ''}</td><td class="num">${fN(p.kwh)}</td><td class="num">${fN(p.sesiones)}</td><td class="num">${fN(p.kwh / p.sesiones, 1)}</td></tr>`).join('') + '</tbody>';
 }
 
 // --- tabla evOS (mes × punto)
 const E_COLS = [
   ['mes', 'Mes', 'm'], ['serial', 'Nº serie'], ['direccion', 'Dirección', 'w'], ['cp', 'CP'], ['ciudad', 'Ciudad'], ['provincia', 'Provincia'],
   ['region', 'Comunidad'], ['ac_dc', 'AC/DC'], ['potencia', 'Potencia kW', 'n'], ['cpo', 'CPO'], ['empresa', 'Empresa'],
-  ['sesiones', 'Sesiones', 'n'], ['kwh', 'kWh', 'n2'], ['importe', 'Importe CPO €', 'n2'], ['segundos', 'Horas de carga', 'h'],
+  ['sesiones', 'Sesiones', 'n'], ['kwh', 'kWh', 'n2'], ['segundos', 'Horas de carga', 'h'],
   ['primera', 'Primera sesión', 't'], ['ultima', 'Última sesión', 't'],
 ];
 ST.e = { pag: 1, orden: 'kwh', dir: 'desc' };
@@ -1183,9 +1184,24 @@ function filasCruce(c) {
   r.sort((a, b) => (a[k] == null) - (b[k] == null) || (typeof a[k] === 'string' ? String(a[k]).localeCompare(b[k]) : a[k] - b[k]) * s);
   return r;
 }
+ST.xmes = null;
+let CRUCE_T = null;
+async function datosCruceT() {
+  const anio = ST.anio ?? new Date().getFullYear(), mes = ST.xmes;
+  if (mes == null) return datosCruce();
+  if (!CRUCE_T || CRUCE_T.anio !== anio || CRUCE_T.mes !== mes) CRUCE_T = await SB.rpc('cruce_resumen', { p_anio: anio, p_mes: mes });
+  return CRUCE_T;
+}
+function irACruce(mes) { ST.xmes = mes; location.hash = 'tablas/cruce'; }
+function pintarSelMes(c) {
+  const sel = $('#xMes'), comp = new Set(c?.comparables || []);
+  sel.innerHTML = '<option value="">Meses comparables</option>' + MESES.map((m, i) => `<option value="${i + 1}">${m}${comp.has(i + 1) ? '' : ' (incompleto)'}</option>`).join('');
+  sel.value = ST.xmes ?? '';
+}
 async function cargarCruceTabla() {
   const tb = $('#tbCruce'); skTabla(tb, 10);
-  const c = await seguro(datosCruce);
+  const c = await seguro(datosCruceT);
+  pintarSelMes(CRUCE && CRUCE.anio === c?.anio ? CRUCE : c);
   tb.classList.remove('loading');
   if (!c) return;
   if (!c.cruce) { tb.innerHTML = '<tbody><tr><td class="muted">Sube el fichero de cruce (nº de serie → CUPS) en «Cargar datos».</td></tr></tbody>'; $('#xTotal').textContent = ''; return; }
@@ -1203,20 +1219,65 @@ async function cargarCruceTabla() {
   tb.querySelectorAll('th').forEach((th) => th.onclick = () => {
     const k = th.dataset.c; ST.x.dir = ST.x.orden === k && ST.x.dir === 'desc' ? 'asc' : 'desc'; ST.x.orden = k; cargarCruceTabla();
   });
+  tb.querySelectorAll('tbody tr').forEach((tr, i) => { if (filas[i]) { tr.classList.add('clic'); tr.onclick = () => abrirDetalle(filas[i].cups20, ST.xmes); } });
   const meses = c.comparables.map((m) => MESES[m - 1]).join(', ');
-  $('#xTotal').textContent = `${fN(filas.length)} CUPS · meses comparables: ${meses || 'ninguno'}`;
+  $('#xTotal').textContent = ST.xmes ? `${fN(filas.length)} CUPS · ${MESES[ST.xmes - 1]} ${c.anio}${c.comparables.includes(ST.xmes) ? '' : ` · evOS solo cubre ${c.dias_mes ?? 0} días`}`
+    : `${fN(filas.length)} CUPS · meses comparables: ${meses || 'ninguno'}`;
 }
 async function exportarCruce() {
-  const c = await seguro(datosCruce); if (!c?.cruce) return;
+  const c = await seguro(datosCruceT); if (!c?.cruce) return;
   const aoa = [X_COLS.map((x) => x[1])].concat(filasCruce(c).map((f) => X_COLS.map(([k, , n]) => (n && n !== 'w' ? (f[k] == null ? null : +f[k]) : f[k]))));
-  descargar(hoja(aoa, []), 'Cruce por CUPS', `cruce_cups_${c.anio}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  descargar(hoja(aoa, []), 'Cruce por CUPS', `cruce_cups_${c.anio}${ST.xmes ? '_' + pad(ST.xmes) : ''}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
+
+// --- detalle de un CUPS (panel lateral)
+async function abrirDetalle(cups20, mes) {
+  const anio = ST.anio ?? new Date().getFullYear();
+  const c = CRUCE && CRUCE.anio === anio ? CRUCE : null;
+  // sin mes: el mes comparable con más diferencia para ese CUPS no se conoce aquí; se usa el último comparable
+  const m = mes ?? (c?.comparables?.at(-1) ?? new Date().getMonth() + 1);
+  const dw = $('#drawer'); dw.classList.remove('hide'); dw.setAttribute('aria-hidden', 'false');
+  $('#dwTitulo').textContent = cups20; $('#dwSub').textContent = `${MESES[m - 1]} ${anio}`;
+  $('#dwCuerpo').innerHTML = `<div class="comp-stats">${Array.from({ length: 3 }, () => `<div>${sk('60%')}<span class="v">${sk('90px', '22px')}</span></div>`).join('')}</div><table class="tbl" id="dwSk"></table>`;
+  skTabla($('#dwSk'), 6, 4);
+  abrirDetalle.actual = { cups20, mes: m };
+  const d = await seguro(() => SB.rpc('cruce_detalle', { p_anio: anio, p_mes: m, p_cups20: cups20 }));
+  if (!d || abrirDetalle.actual?.cups20 !== cups20 || abrirDetalle.actual?.mes !== m) return;
+  const F = d.facturas.reduce((a, f) => a + (+f.kwh_mes || 0), 0), E = d.puntos.reduce((a, p) => a + (+p.kwh || 0), 0);
+  $('#dwTitulo').textContent = d.direccion || cups20;
+  $('#dwSub').innerHTML = `<span class="cups">${esc(cups20)}</span> · <select id="dwMes" aria-label="Mes">${MESES.map((x, i) => `<option value="${i + 1}" ${i + 1 === m ? 'selected' : ''}>${x} ${anio}</option>`).join('')}</select>`;
+  $('#dwMes').onchange = (e) => abrirDetalle(cups20, +e.target.value);
+  const estado = (f) => [f.estado ? `<span class="tag ${esc(f.estado)}">${ESTADOS[f.estado] || esc(f.estado)}</span>` : '',
+    f.sustituida ? `<span class="tag sust" title="${esc(f.motivo_sust || '')}">Sustituida</span>` : '', f.excluida ? '<span class="tag exc">Excluida</span>' : '',
+    f.negativa ? '<span class="tag neg">−</span>' : '', f.anomala ? '<span class="tag exc">kWh anómalo</span>' : ''].join(' ');
+  $('#dwCuerpo').innerHTML = `
+    <div class="comp-stats">
+      <div><span class="k">Facturado en ${MESES[m - 1].toLowerCase()}</span><span class="v">${fN(F)} kWh</span><span class="s">parte de las facturas que cae en el mes</span></div>
+      <div><span class="k">Entregado (evOS)</span><span class="v">${fN(E)} kWh</span><span class="s">${fN(d.puntos.reduce((a, p) => a + (+p.sesiones || 0), 0))} sesiones en ${d.puntos.length} ${d.puntos.length === 1 ? 'punto' : 'puntos'}</span></div>
+      <div><span class="k">Diferencia</span><span class="v">${F ? desv((F - E) / F * 100, 25) : '—'}</span><span class="s">${fN(F - E)} kWh</span></div>
+    </div>
+    <h4 class="mini-h">Facturas que tocan el mes</h4>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Factura</th><th>Periodo</th><th>Lectura</th><th class="num">kWh factura</th><th class="num">% en el mes</th><th class="num">kWh en el mes</th><th>Estado</th></tr></thead><tbody>` +
+    (d.facturas.length ? d.facturas.map((f) => `<tr class="${f.cuenta ? '' : 'muted'}"><td>${esc(f.id_factura)}<br><span class="muted sm">emitida ${fFecha(f.fecha_emision)} · ${esc(f.tarifa || '')}</span></td>
+      <td>${fFecha(f.fecha_desde)} – ${fFecha(f.fecha_hasta)}</td><td>${esc(f.tipo_lectura || '')}</td><td class="num">${fN(f.kwh)}</td><td class="num">${fN(f.parte * 100, 0)} %</td>
+      <td class="num"><b>${f.kwh_mes == null ? '—' : fN(f.kwh_mes)}</b></td><td>${estado(f)}</td></tr>`).join('')
+      : '<tr><td colspan="7" class="muted">Ninguna factura de este CUPS cubre el mes.</td></tr>') + `</tbody></table></div>
+    <h4 class="mini-h">Puntos de recarga (evOS)</h4>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nº de serie</th><th>Dirección</th><th>Tipo</th><th class="num">Sesiones</th><th class="num">kWh</th><th class="num">Horas</th></tr></thead><tbody>` +
+    (d.puntos.length ? d.puntos.map((p) => `<tr><td>${esc(p.serial_cruce || p.serial)}${p.metodo === 'recuperado' ? ` <span class="tag sust" title="En evOS venía como ${esc(p.serial)}">recuperado</span>` : ''}</td>
+      <td class="wrap">${esc(p.direccion || '')}<br><span class="muted sm">${esc([p.cp, p.ciudad].filter(Boolean).join(' '))}</span></td><td>${esc(p.ac_dc || '')}${p.potencia ? ` · ${fN(p.potencia)} kW` : ''}</td>
+      <td class="num">${fN(p.sesiones)}</td><td class="num"><b>${fN(p.kwh)}</b></td><td class="num">${fN(p.horas, 1)}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="muted">Ningún punto de este CUPS tiene sesiones en evOS este mes.</td></tr>') + `</tbody></table></div>` +
+    (d.puntos_sin_sesiones.length ? `<p class="note">Puntos de este CUPS en el cruce <b>sin sesiones</b> en evOS este mes: ${d.puntos_sin_sesiones.map(esc).join(', ')}. Si estuvieron funcionando, puede que evOS los tenga con otro nº de serie.</p>` : '') +
+    `<p class="note">Cada factura se reparte entre los días de su periodo: «kWh en el mes» es la parte que corresponde a ${MESES[m - 1].toLowerCase()}. Las facturas sustituidas o excluidas aparecen en gris y no cuentan.</p>`;
+}
+function cerrarDetalle() { const dw = $('#drawer'); dw.classList.add('hide'); dw.setAttribute('aria-hidden', 'true'); abrirDetalle.actual = null; }
 
 // --- tabla de puntos de recarga (evOS)
 const U_COLS = [
   ['serial', 'Nº serie'], ['direccion', 'Dirección', 'w'], ['cp', 'CP'], ['ciudad', 'Ciudad'], ['provincia', 'Provincia'], ['region', 'Comunidad'],
   ['ac_dc', 'AC/DC'], ['potencia', 'Potencia kW', 'n'], ['cups20', 'CUPS'], ['facturado', 'CUPS facturado', 'b'], ['meses', 'Meses activos', 'n'],
-  ['sesiones', 'Sesiones', 'n'], ['kwh', 'kWh', 'n2'], ['kwh_ses', 'kWh/sesión', 'n1'], ['importe', 'Importe CPO €', 'n2'], ['horas', 'Horas de carga', 'n1'],
+  ['sesiones', 'Sesiones', 'n'], ['kwh', 'kWh', 'n2'], ['kwh_ses', 'kWh/sesión', 'n1'], ['horas', 'Horas de carga', 'n1'],
   ['primera', 'Primera sesión', 't'], ['ultima', 'Última sesión', 't'],
 ];
 ST.u = { orden: 'kwh', dir: 'desc' };
@@ -1329,7 +1390,8 @@ ST.tab = 'bt';
 function irA(v) { mostrarVista(v); refrescar(); }
 function mostrarVista(v) {
   v = ALIAS[v] || v || 'inicio';
-  let [vista, tab] = v.split('/');
+  let [vista, tab, extra] = v.split('/');
+  if (vista === 'tablas' && tab === 'cruce' && extra) ST.xmes = +extra || null;
   if (!TITULOS[vista]) vista = 'inicio';
   if (vista === 'tablas') { ST.tab = TABS[tab] ? tab : ST.tab; if (location.hash.slice(1) !== 'tablas/' + ST.tab) history.replaceState(null, '', '#tablas/' + ST.tab); }
   if (vista === 'inicio') { ST.itab = ITABS[tab] ? tab : ST.itab; if (location.hash.slice(1) !== 'inicio/' + ST.itab) history.replaceState(null, '', '#inicio/' + ST.itab); }
@@ -1530,6 +1592,9 @@ function init() {
   $('#uQ').oninput = deb(cargarPuntosEv);
   $('#uExport').onclick = exportarPuntosEv;
   $('#xQ').oninput = deb(cargarCruceTabla);
+  $('#xMes').onchange = (e) => { ST.xmes = e.target.value ? +e.target.value : null; cargarCruceTabla(); };
+  $$('#drawer [data-cerrar]').forEach((b) => b.onclick = cerrarDetalle);
+  addEventListener('keydown', (e) => { if (e.key === 'Escape') cerrarDetalle(); });
   $('#xExport').onclick = exportarCruce;
   // vaciar
   $('#btnVaciar').onclick = () => $('#modal').classList.remove('hide');

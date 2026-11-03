@@ -1118,7 +1118,9 @@ end;
 $$;
 
 -- Comparativa del perímetro cruzado: CUPS facturados que tienen puntos de evOS
-create or replace function public.cruce_resumen(p_anio int)
+drop function if exists public.cruce_resumen(int);
+-- p_mes: null = todos los meses comparables; un mes = solo ese mes (aunque evOS no lo cubra entero)
+create or replace function public.cruce_resumen(p_anio int, p_mes int default null)
 returns jsonb language sql stable security definer set search_path = public as $$
   with ev as (   -- evOS por mes y CUPS (null = sin CUPS)
     select a.mes, e.cups20, e.metodo, sum(a.kwh)::float8 kwh, sum(a.importe)::float8 importe, sum(a.sesiones) sesiones
@@ -1141,8 +1143,9 @@ returns jsonb language sql stable security definer set search_path = public as $
                 sum(ev.kwh) filter (where ev.cups20 is not null and fc.cups20 is null) e_nofact,
                 sum(ev.kwh) filter (where ev.metodo = 'recuperado' and per.cups20 is not null) e_rec
          from ev left join per using (cups20) left join fcups fc using (cups20) group by 1),
-  fc_c as (select cups20, sum(kwh) f_kwh, sum(neto) f_neto from fa where mes in (select mes from comp) group by 1),
-  ev_c as (select cups20, sum(kwh) e_kwh, sum(sesiones) e_ses from ev where mes in (select mes from comp) and cups20 is not null group by 1),
+  sel as (select mes from comp where p_mes is null union select p_mes where p_mes is not null),
+  fc_c as (select cups20, sum(kwh) f_kwh, sum(neto) f_neto from fa where mes in (select mes from sel) group by 1),
+  ev_c as (select cups20, sum(kwh) e_kwh, sum(sesiones) e_ses from ev where mes in (select mes from sel) and cups20 is not null group by 1),
   pts as (select cups20, count(*) puntos from public.evos_cups where cups20 is not null group by 1),
   dirs as (select left(cups, 20) cups20, max(cups) cups, max(direccion) direccion from public.cache_cups where anio = p_anio group by 1),
   porcups as (select p.cups20, f.f_kwh, f.f_neto, e.e_kwh, e.e_ses, coalesce(t.puntos, 0) puntos, d.direccion, d.cups
@@ -1152,6 +1155,8 @@ returns jsonb language sql stable security definer set search_path = public as $
     'anio', p_anio,
     'cruce', (select jsonb_build_object('archivo', archivo, 'fecha', fecha, 'filas', filas) from public.cruce_cargas order by id desc limit 1),
     'comparables', (select coalesce(jsonb_agg(mes order by mes), '[]') from comp),
+    'mes', p_mes,
+    'dias_mes', (select dias from dias where mes = p_mes),
     'mensual', (select jsonb_agg(jsonb_build_object('mes', g.mes, 'f_per', fm.f_per, 'f_neto_per', fm.f_neto_per, 'f_tot', fm.f_tot,
                                                     'e_per', em.e_per, 'e_imp_per', em.e_imp_per, 'e_tot', em.e_tot,
                                                     'e_sin', em.e_sin, 'e_nofact', em.e_nofact, 'e_rec', em.e_rec) order by g.mes)
@@ -1164,8 +1169,48 @@ returns jsonb language sql stable security definer set search_path = public as $
       ) order by coalesce(c.f_kwh, 0) - coalesce(c.e_kwh, 0) desc), '[]') from porcups c)
   );
 $$;
-grant execute on function public.refrescar_cruce(), public.cruce_aplicar(bigint), public.cruce_resumen(int) to authenticated;
-revoke execute on function public.refrescar_cruce(), public.cruce_aplicar(bigint), public.cruce_resumen(int) from anon, public;
+-- Detalle de un CUPS en un mes: sus facturas (con la parte que cae en el mes) y sus puntos de evOS
+create or replace function public.cruce_detalle(p_anio int, p_mes int, p_cups20 text)
+returns jsonb language sql stable security definer set search_path = public as $$
+  with r as (select make_date(p_anio, p_mes, 1) d0, (make_date(p_anio, p_mes, 1) + interval '1 month')::date - 1 d1),
+  f as (
+    select f.id_factura, max(f.cups) cups, max(f.estado) estado, max(f.tension) tension, max(f.tarifa) tarifa, max(f.tipo_lectura) tipo_lectura,
+           max(f.fecha_emision) fecha_emision, max(f.fecha_desde) fecha_desde, max(f.fecha_hasta) fecha_hasta,
+           sum(f.kwh) kwh, sum(f.imp_neto) neto, bool_or(f.excluida) excluida, bool_or(f.sustituida) sustituida,
+           max(f.motivo_sust) motivo_sust, bool_or(f.negativa) negativa, bool_or(f.anomala) anomala,
+           max(f.archivo_origen) archivo
+    from public.facturas_calc f, r
+    where f.cups >= p_cups20 and f.cups <= p_cups20 || 'ZZZZ' and left(f.cups, 20) = p_cups20
+      and f.fecha_hasta >= r.d0 and coalesce(f.fecha_desde, f.fecha_hasta) <= r.d1
+    group by f.id_factura),
+  fw as (
+    select f.*, case when f.fecha_desde is not null and f.fecha_hasta - f.fecha_desde between 0 and 400
+                     then (least(f.fecha_hasta, r.d1) - greatest(f.fecha_desde, r.d0) + 1)::numeric / (f.fecha_hasta - f.fecha_desde + 1)
+                     else case when f.fecha_hasta between r.d0 and r.d1 then 1 else 0 end end parte
+    from f, r)
+  select jsonb_build_object(
+    'anio', p_anio, 'mes', p_mes, 'cups20', p_cups20,
+    'direccion', (select max(direccion) from public.cache_cups where left(cups, 20) = p_cups20),
+    'facturas', (select coalesce(jsonb_agg(jsonb_build_object(
+        'id_factura', id_factura, 'cups', cups, 'estado', estado, 'tension', tension, 'tarifa', tarifa, 'tipo_lectura', tipo_lectura,
+        'fecha_emision', fecha_emision, 'fecha_desde', fecha_desde, 'fecha_hasta', fecha_hasta, 'kwh', kwh, 'neto', neto,
+        'parte', round(parte, 4), 'kwh_mes', case when not excluida and not sustituida then round(kwh * parte, 1) end,
+        'cuenta', not excluida and not sustituida, 'excluida', excluida, 'sustituida', sustituida, 'motivo_sust', motivo_sust,
+        'negativa', negativa, 'anomala', anomala, 'archivo', archivo) order by fecha_desde, fecha_emision), '[]') from fw),
+    'puntos', (select coalesce(jsonb_agg(p order by p.kwh desc), '[]') from (
+        select a.punto, max(a.serial) serial, max(e.serial_cruce) serial_cruce, max(e.metodo) metodo, max(a.direccion) direccion,
+               max(a.cp) cp, max(a.ciudad) ciudad, string_agg(distinct nullif(a.ac_dc, ''), '/') ac_dc, max(a.potencia) potencia,
+               sum(a.sesiones) sesiones, round(sum(a.kwh), 1) kwh, round(sum(a.segundos) / 3600.0, 1) horas
+        from public.evos_cups e join public.evos_agg a on a.punto = e.punto and a.anio = p_anio and a.mes = p_mes
+        where e.cups20 = p_cups20 group by a.punto) p),
+    'puntos_sin_sesiones', (select coalesce(jsonb_agg(c.serial order by c.serial), '[]') from public.cruce_puntos c
+        where c.cups20 = p_cups20 and c.carga_id = (select max(id) from public.cruce_cargas)
+          and not exists (select 1 from public.evos_cups e join public.evos_agg a on a.punto = e.punto and a.anio = p_anio and a.mes = p_mes
+                          where e.cups20 = p_cups20 and e.serial_cruce = c.serial))
+  );
+$$;
+grant execute on function public.refrescar_cruce(), public.cruce_aplicar(bigint), public.cruce_resumen(int, int), public.cruce_detalle(int, int, text) to authenticated;
+revoke execute on function public.refrescar_cruce(), public.cruce_aplicar(bigint), public.cruce_resumen(int, int), public.cruce_detalle(int, int, text) from anon, public;
 
 -- ---------------------------------------------------------------- ajustes finales
 -- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)
