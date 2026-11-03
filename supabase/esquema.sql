@@ -1248,6 +1248,65 @@ $$;
 grant execute on function public.refrescar_cruce(), public.cruce_resumen(int, int), public.cruce_detalle(int, int, text) to authenticated;
 revoke execute on function public.refrescar_cruce(), public.cruce_resumen(int, int), public.cruce_detalle(int, int, text) from anon, public;
 
+-- ---------------------------------------------------------------- estado del maestro de puntos
+-- Resumen del maestro de puntos de recarga para la pestaña «Puntos» del inicio
+create or replace function public.puntos_resumen(p_anio int)
+returns jsonb language sql stable security definer set search_path = public as $$
+  with ses as (select e.serial_cruce from public.evos_cups e join public.evos_agg a on a.punto = e.punto and a.anio = p_anio
+               where e.serial_cruce is not null group by 1),
+  p as (
+    select pr.*, public._cups20(pr.cups) c20, (ses.serial_cruce is not null) con_sesiones
+    from public.puntos_recarga pr left join ses on ses.serial_cruce = pr.numero_serie),
+  fac as (select cups20 from public.cache_prorr_cups where anio = p_anio group by 1 having sum(abs(kwh)) > 0),
+  q as (select p.*, (p.c20 is not null and exists (select 1 from fac where fac.cups20 = p.c20)) facturado from p)
+  select jsonb_build_object(
+    'anio', p_anio,
+    'kpi', (select jsonb_build_object(
+        'puntos', count(*), 'charging_points', coalesce(sum(charging_points), 0),
+        'con_cups', count(*) filter (where c20 is not null), 'sin_cups', count(*) filter (where c20 is null),
+        'cups', count(distinct c20), 'cups_facturados', count(distinct c20) filter (where facturado),
+        'con_sesiones', count(*) filter (where con_sesiones),
+        'con_cups_fact', count(*) filter (where facturado),
+        'perimetro', count(*) filter (where facturado and con_sesiones)) from q),
+    'motivos', (select coalesce(jsonb_agg(jsonb_build_object('motivo', motivo, 'n', n) order by n desc), '[]') from (
+        select case when nullif(btrim(cups), '') is null then 'Sin CUPS informado'
+                    when cups ~* 'CPO' then 'Marcado como CPO'
+                    when cups ~* 'aplica' then 'No aplica'
+                    else 'CUPS con formato erróneo' end motivo, count(*) n
+        from q where c20 is null group by 1) m),
+    'tipologias', (select coalesce(jsonb_agg(t order by t.puntos desc), '[]') from (
+        select coalesce(nullif(btrim(tipologia), ''), 'Sin tipología') tipologia, count(*) puntos,
+               count(*) filter (where c20 is null) sin_cups, sum(charging_points) charging_points,
+               count(*) filter (where con_sesiones) con_sesiones
+        from q group by 1) t),
+    'provincias', (select coalesce(jsonb_agg(t order by t.puntos desc), '[]') from (
+        select coalesce(nullif(btrim(provincia), ''), 'Sin provincia') provincia, count(*) puntos,
+               count(*) filter (where c20 is null) sin_cups
+        from q group by 1) t),
+    'altas', (select coalesce(jsonb_agg(t order by t.anio), '[]') from (
+        select extract(year from fecha_activacion)::int anio, count(*) puntos, sum(charging_points) charging_points
+        from q where fecha_activacion is not null group by 1) t),
+    'modelos', (select coalesce(jsonb_agg(t order by t.puntos desc), '[]') from (
+        select modelo, count(*) puntos from q group by 1 order by 2 desc limit 10) t)
+  );
+$$;
+
+-- Puntos del maestro sin CUPS válido, con su actividad en evOS en el año
+create or replace function public.puntos_sin_cups(p_anio int)
+returns jsonb language sql stable security definer set search_path = public as $$
+  with ses as (select e.serial_cruce, sum(a.sesiones) sesiones, round(sum(a.kwh), 1) kwh
+               from public.evos_cups e join public.evos_agg a on a.punto = e.punto and a.anio = p_anio
+               where e.serial_cruce is not null group by 1)
+  select coalesce(jsonb_agg(t order by t.kwh desc nulls last, t.nombre_activo), '[]') from (
+    select pr.id_activo, pr.nombre_activo, pr.numero_serie, pr.nombre_cuenta, pr.direccion, pr.provincia, pr.tipologia,
+           pr.charging_points, pr.estado, pr.fecha_activacion, pr.modelo, pr.codigo_oportunidad, pr.order_id, pr.cups,
+           ses.sesiones, ses.kwh
+    from public.puntos_recarga pr left join ses on ses.serial_cruce = pr.numero_serie
+    where public._cups20(pr.cups) is null) t;
+$$;
+grant execute on function public.puntos_resumen(int), public.puntos_sin_cups(int) to authenticated;
+revoke execute on function public.puntos_resumen(int), public.puntos_sin_cups(int) from anon, public;
+
 -- ---------------------------------------------------------------- ajustes finales
 -- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)
 alter role authenticated set statement_timeout = '60s';

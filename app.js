@@ -743,7 +743,7 @@ async function guardarRegla(e) {
   datosCambiados(); await cargarCorrecciones(); toast('Corrección guardada y aplicada');
 }
 /** Tras cambiar datos o correcciones: olvidar cachés y recalcular lo visible */
-function datosCambiados() { PUNTOS.clave = null; DASH = null; COMP_FRESCO = null; EVP = { clave: null, filas: [] }; CRUCE = null; CRUCE_T = null; }
+function datosCambiados() { PUNTOS.clave = null; DASH = null; COMP_FRESCO = null; EVP = { clave: null, filas: [] }; CRUCE = null; CRUCE_T = null; SINC = { clave: null, filas: [] }; }
 
 // ---------------------------------------------------------------- CARGAR
 const OK = /\.(xlsx|xlsm|xls|csv|zip)$/i;
@@ -1261,6 +1261,97 @@ async function abrirDetalle(cups20, mes) {
 }
 function cerrarDetalle() { const dw = $('#drawer'); dw.classList.add('hide'); dw.setAttribute('aria-hidden', 'true'); abrirDetalle.actual = null; }
 
+// --- Inicio › Puntos: estado del maestro
+let PRES = null;
+async function cargarPuntosInicio() {
+  const anio = ST.anio ?? new Date().getFullYear(), clave = 'pres.' + anio, g = LS.get(clave);
+  if (g) pintarPuntosInicio(g);
+  else {
+    $('#pPuntos').innerHTML = sk('120px', '44px');
+    for (const id of ['#pConCups', '#pSinCups', '#pSes', '#pFact']) $(id).innerHTML = sk('90px', '26px');
+    $('#chAltas').innerHTML = skCols();
+  }
+  const d = await seguro(() => SB.rpc('puntos_resumen', { p_anio: anio }));
+  if (!d) return;
+  LS.set(clave, d);
+  if ((ST.anio ?? new Date().getFullYear()) === anio) pintarPuntosInicio(d);
+}
+function pintarPuntosInicio(d) {
+  PRES = d;
+  if (ST.vista !== 'inicio' || ST.itab !== 'puntos') return;
+  const k = d.kpi, pc = (v) => (k.puntos ? fN(v / k.puntos * 100, 0) + ' %' : '—');
+  $('#pPuntos').textContent = fN(k.puntos); $('#pPuntosSub').textContent = `${fN(k.charging_points)} charging points`;
+  $('#pConCups').textContent = fN(k.con_cups); $('#pConCupsSub').textContent = `${pc(k.con_cups)} de los puntos · ${fN(k.cups)} CUPS distintos`;
+  $('#pSinCups').textContent = fN(k.sin_cups); $('#pSinCupsSub').innerHTML = `${pc(k.sin_cups)} · <a href="#tablas/sincups" class="link">ver listado</a>`;
+  $('#pSes').textContent = fN(k.con_sesiones); $('#pSesSub').textContent = `${pc(k.con_sesiones)} de los puntos en ${d.anio}`;
+  $('#pFact').textContent = fN(k.cups_facturados); $('#pFactSub').textContent = `de ${fN(k.cups)} CUPS del maestro en ${d.anio}`;
+  $('#pEmbudoAnio').textContent = String(d.anio);
+  const paso = (t, v, sub = '') => `<div class="cob"><span class="n">${t}${sub ? `<small>${sub}</small>` : ''}</span><span class="t"><span class="f" style="width:${k.puntos ? v / k.puntos * 100 : 0}%"></span></span><span class="v">${fN(v)}<small>${pc(v)}</small></span></div>`;
+  $('#lsEmbudo').innerHTML = paso('Puntos Public Infra', k.puntos) + paso('Con CUPS válido', k.con_cups) +
+    paso('Su CUPS se factura', k.con_cups_fact, `en ${d.anio}`) + paso('Y tiene sesiones en evOS', k.perimetro, 'entran en la comparación');
+  hbars($('#lsMotivos'), d.motivos.map((m) => ({ label: m.motivo, value: m.n })), { fmtV: (r) => fN(r.value) });
+  hbars($('#lsTipos'), d.tipologias.slice(0, 10).map((t) => ({ ...t, label: t.tipologia, value: t.puntos - t.sin_cups, prev: t.puntos })), {
+    fmtV: (r) => `${fN(r.puntos)}${r.sin_cups ? ` · <span class="muted">${fN(r.sin_cups)} sin CUPS</span>` : ''}`,
+    tipFn: (r) => tipRows(r.label, [['Puntos', fN(r.puntos)], ['Con CUPS', fN(r.puntos - r.sin_cups)], ['Sin CUPS', fN(r.sin_cups)], ['Charging points', fN(r.charging_points)], [`Con sesiones en evOS (${d.anio})`, fN(r.con_sesiones)]]),
+  });
+  columnChart($('#chAltas'), d.altas.map((a) => ({ ...a, label: String(a.anio), value: a.puntos })), {
+    tipFn: (a) => tipRows(`Altas ${a.anio}`, [['Puntos', fN(a.puntos)], ['Charging points', fN(a.charging_points)]]),
+  });
+  hbars($('#lsProv'), d.provincias.slice(0, 12).map((t) => ({ ...t, label: t.provincia, value: t.puntos - t.sin_cups, prev: t.puntos })), {
+    fmtV: (r) => `${fN(r.puntos)}${r.sin_cups ? ` · <span class="muted">${fN(r.sin_cups)} sin CUPS</span>` : ''}`,
+  });
+}
+
+// --- Tablas › Puntos sin CUPS
+const S_COLS = [
+  ['nombre_activo', 'Nombre de activo', 'w'], ['numero_serie', 'Nº de serie'], ['nombre_cuenta', 'Nombre de la cuenta', 'w'], ['tipologia', 'Tipología'],
+  ['provincia', 'Provincia'], ['direccion', 'Dirección', 'w'], ['charging_points', 'Charging Points', 'n'], ['estado', 'Estado'],
+  ['fecha_activacion', 'Fecha de activación', 't'], ['cups', 'CUPS (valor actual)'], ['sesiones', 'Sesiones evOS', 'n'], ['kwh', 'kWh evOS', 'n'],
+];
+ST.s = { orden: 'kwh', dir: 'desc' };
+let SINC = { clave: null, filas: [] };
+async function datosSinCups() {
+  const anio = ST.anio ?? new Date().getFullYear();
+  if (SINC.clave !== anio) SINC = { clave: anio, filas: (await SB.rpc('puntos_sin_cups', { p_anio: anio })) || [] };
+  return SINC.filas;
+}
+function sinCupsFiltrados(todos) {
+  const q = $('#sQ').value.trim().toLowerCase(), tipo = $('#sTipo').value;
+  let r = todos.filter((p) => (!tipo || (p.tipologia || '') === tipo) && (!q || ['nombre_activo', 'numero_serie', 'nombre_cuenta', 'direccion', 'provincia'].some((k) => String(p[k] ?? '').toLowerCase().includes(q))));
+  const k = ST.s.orden, s = ST.s.dir === 'asc' ? 1 : -1;
+  r.sort((a, b) => (a[k] == null) - (b[k] == null) || (typeof a[k] === 'string' ? String(a[k]).localeCompare(b[k]) : a[k] - b[k]) * s);
+  return r;
+}
+async function cargarSinCups() {
+  const tb = $('#tbSinCups'); skTabla(tb, 12);
+  const todos = await seguro(datosSinCups);
+  tb.classList.remove('loading');
+  if (!todos) return;
+  const sel = $('#sTipo'), act = sel.value;
+  const tipos = [...new Set(todos.map((p) => p.tipologia || ''))].filter(Boolean).sort();
+  sel.innerHTML = '<option value="">Todas las tipologías</option>' + tipos.map((t) => `<option ${t === act ? 'selected' : ''}>${esc(t)}</option>`).join('');
+  const filas = sinCupsFiltrados(todos), vis = filas.slice(0, 500);
+  tb.innerHTML = `<thead><tr>${S_COLS.map(([k, t, n]) => `<th data-c="${k}" class="${n === 'n' ? 'num' : ''}">${t}${ST.s.orden === k ? `<span class="ar">${ST.s.dir === 'desc' ? '↓' : '↑'}</span>` : ''}</th>`).join('')}</tr></thead><tbody>` +
+    (vis.length ? vis.map((f) => `<tr>${S_COLS.map(([k, , n]) => {
+      const v = f[k];
+      if (n === 'w') return `<td class="wrap">${esc(v)}</td>`;
+      if (n === 'n') return `<td class="num">${v == null ? '' : fN(v)}</td>`;
+      if (n === 't') return `<td>${v ? fFecha(v) : ''}</td>`;
+      if (k === 'cups') return `<td class="muted sm">${esc(v || '(vacío)')}</td>`;
+      return `<td>${esc(v)}</td>`;
+    }).join('')}</tr>`).join('') : `<tr><td colspan="${S_COLS.length}" class="muted">Todos los puntos tienen CUPS.</td></tr>`) + '</tbody>';
+  tb.querySelectorAll('th').forEach((th) => th.onclick = () => {
+    const c = th.dataset.c; ST.s.dir = ST.s.orden === c && ST.s.dir === 'desc' ? 'asc' : 'desc'; ST.s.orden = c; cargarSinCups();
+  });
+  $('#sTotal').textContent = filas.length > vis.length ? `${fN(filas.length)} puntos (se muestran ${vis.length}; exporta para verlos todos)` : `${fN(filas.length)} puntos`;
+}
+async function exportarSinCups() {
+  const todos = await seguro(datosSinCups); if (!todos) return;
+  const aoa = [S_COLS.map((c) => c[1])].concat(sinCupsFiltrados(todos).map((f) => S_COLS.map(([k, , n]) =>
+    n === 't' ? (f[k] ? tsASerial(f[k].replace('T', ' ')) : null) : n === 'n' ? (f[k] == null ? null : +f[k]) : f[k])));
+  descargar(hojaFechaHora(aoa, S_COLS.map((c, i) => (c[2] === 't' ? i : -1)).filter((i) => i >= 0)), 'Puntos sin CUPS', `puntos_sin_cups_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
 // --- tabla de puntos de recarga (evOS)
 const U_COLS = [
   ['serial', 'Nº serie'], ['direccion', 'Dirección', 'w'], ['cp', 'CP'], ['ciudad', 'Ciudad'], ['provincia', 'Provincia'], ['region', 'Comunidad'],
@@ -1364,7 +1455,7 @@ const TITULOS = {
   cargar: ['Cargar datos', 'Facturas de Endesa, ficheros de evOS y analítico del equipo, en un solo sitio'],
   correcciones: ['Correcciones', 'Reglas para corregir cómo cuentan algunas facturas'],
 };
-const ITABS = { general: 'Facturado frente a lo entregado según evOS', facturas: 'Resumen de consumo y coste de las facturas de Endesa', evos: 'Sesiones de carga registradas en evOS' };
+const ITABS = { general: 'Facturado frente a lo entregado según evOS', facturas: 'Resumen de consumo y coste de las facturas de Endesa', evos: 'Sesiones de carga registradas en evOS', puntos: 'Estado del maestro de puntos de recarga (Public Infra)' };
 ST.itab = 'general';
 const TABS = {
   bt: 'Líneas de factura de baja tensión (tarifas 2.0TD / 3.0TD), sin duplicados',
@@ -1372,6 +1463,7 @@ const TABS = {
   cups: 'Consumo y coste agregados por CUPS (un CUPS puede agrupar varios puntos de recarga)',
   evos: 'Sesiones de evOS sumadas por mes y punto de carga',
   puntos: 'Puntos de recarga según evOS (por número de serie)',
+  sincups: 'Puntos Public Infra del maestro sin CUPS válido',
   cruce: 'Facturado frente a entregado, CUPS a CUPS (según el maestro de puntos de recarga)',
   analitico: 'Facturas frente al analítico que monta el equipo',
 };
@@ -1408,7 +1500,7 @@ function mostrarVista(v) {
   if (iFact) skDashboard();
 }
 function refrescar() {
-  if (ST.vista === 'inicio') { if (ST.itab === 'facturas') cargarDashboard(); else cargarEvosInicio(); }
+  if (ST.vista === 'inicio') { if (ST.itab === 'facturas') cargarDashboard(); else if (ST.itab === 'puntos') cargarPuntosInicio(); else cargarEvosInicio(); }
   else if (ST.vista === 'cargar') cargarDatosCargar();
   else if (ST.vista === 'correcciones') cargarCorrecciones();
   else if (ST.vista === 'tablas') {
@@ -1418,6 +1510,7 @@ function refrescar() {
     else if (ST.tab === 'puntos') cargarPuntosEv();
     else if (ST.tab === 'analitico') cargarComparativa();
     else if (ST.tab === 'cruce') cargarCruceTabla();
+    else if (ST.tab === 'sincups') cargarSinCups();
   }
 }
 async function refrescarAnios() {
@@ -1583,6 +1676,9 @@ function init() {
   $('#uQ').oninput = deb(cargarPuntosEv);
   $('#uExport').onclick = exportarPuntosEv;
   $('#xQ').oninput = deb(cargarCruceTabla);
+  $('#sQ').oninput = deb(cargarSinCups);
+  $('#sTipo').onchange = cargarSinCups;
+  $('#sExport').onclick = exportarSinCups;
   $('#xMes').onchange = (e) => { ST.xmes = e.target.value ? +e.target.value : null; cargarCruceTabla(); };
   $$('#drawer [data-cerrar]').forEach((b) => b.onclick = cerrarDetalle);
   addEventListener('keydown', (e) => { if (e.key === 'Escape') cerrarDetalle(); });
@@ -1599,7 +1695,8 @@ function init() {
 
   let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => {
     if (ST.vista === 'inicio' && ST.itab === 'facturas' && DASH && !DASH.vacio) pintarDashboard();
-    if (ST.vista === 'inicio' && ST.itab !== 'facturas' && EVOS) pintarEvosInicio(EVOS);
+    if (ST.vista === 'inicio' && ['general', 'evos'].includes(ST.itab) && EVOS) pintarEvosInicio(EVOS);
+    if (ST.vista === 'inicio' && ST.itab === 'puntos' && PRES) pintarPuntosInicio(PRES);
     if (ST.vista === 'tablas' && ST.tab === 'analitico' && COMP?.carga) cargarComparativa();
   }, 150); });
   addEventListener('hashchange', () => { if (!$('#appRoot').classList.contains('hide')) irA(location.hash.slice(1)); });

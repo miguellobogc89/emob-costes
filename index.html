@@ -73,7 +73,7 @@
     <!-- ---------- INICIO ---------- -->
     <section class="vista" id="v-inicio">
       <div class="tabs" id="tabsInicio" role="tablist">
-        <button data-t="general">Visión general</button><button data-t="facturas">Facturas</button><button data-t="evos">evOS</button>
+        <button data-t="general">Visión general</button><button data-t="facturas">Facturas</button><button data-t="evos">evOS</button><button data-t="puntos">Puntos</button>
       </div>
       <div class="pane" data-p="general">
         <div id="genVacio" class="empty hide">
@@ -230,12 +230,48 @@
           </div>
         </div>
       </div>
+
+      <div class="pane" data-p="puntos">
+        <div class="kpis">
+          <div class="card hero">
+            <span class="lbl"><span>Puntos de recarga Public Infra</span><button class="info" type="button" aria-label="Qué significa" data-info="Activos del maestro de puntos de recarga (Excel W44, Public Infra). Debajo, cuántos charging points suman (columna Charging Points).">i</button></span>
+            <div class="hero-val"><span id="pPuntos">—</span><small>activos</small></div>
+            <span class="muted sm" id="pPuntosSub"></span>
+          </div>
+          <div class="card tile"><span class="lbl">Con CUPS<button class="info" type="button" aria-label="Qué significa" data-info="Puntos cuyo CUPS en el maestro tiene formato válido (ES + 16 dígitos + 2 letras).">i</button></span><b id="pConCups">—</b><span class="muted sm" id="pConCupsSub"></span></div>
+          <div class="card tile"><span class="lbl">Sin CUPS<button class="info" type="button" aria-label="Qué significa" data-info="Puntos sin CUPS válido en el maestro: vacío, marcado como CPO, «no aplica» o con un formato erróneo. No entran en la comparación con las facturas. El listado está en Tablas › Puntos sin CUPS.">i</button></span><b id="pSinCups">—</b><span class="muted sm" id="pSinCupsSub"></span></div>
+          <div class="card tile"><span class="lbl">Con sesiones en evOS<button class="info" type="button" aria-label="Qué significa" data-info="Puntos del maestro que aparecen con alguna sesión de carga en evOS en el año (por nº de serie, o recuperado si evOS lo trae estropeado).">i</button></span><b id="pSes">—</b><span class="muted sm" id="pSesSub"></span></div>
+          <div class="card tile"><span class="lbl">CUPS facturados<button class="info" type="button" aria-label="Qué significa" data-info="CUPS distintos del maestro que tienen facturas de Endesa en el año.">i</button></span><b id="pFact">—</b><span class="muted sm" id="pFactSub"></span></div>
+        </div>
+        <div class="grid g1-2">
+          <div class="card">
+            <div class="card-h"><h3>De punto a comparación<button class="info" type="button" aria-label="Qué significa" data-info="Cuántos puntos del maestro pasan cada filtro hasta entrar en la comparación facturado frente a evOS: tener CUPS válido, que ese CUPS se facture y que el punto tenga sesiones en evOS.">i</button></h3><span class="muted sm" id="pEmbudoAnio"></span></div>
+            <div id="lsEmbudo" class="stack"></div>
+            <h4 class="mini-h" style="margin-top:14px">Por qué faltan CUPS</h4>
+            <div id="lsMotivos" class="hbars"></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Por tipología<button class="info" type="button" aria-label="Qué significa" data-info="Puntos de cada tipología del maestro. La barra clara son todos; la oscura, los que tienen CUPS. Pasa el ratón para ver charging points y puntos con sesiones en evOS.">i</button></h3><a href="#tablas/sincups" class="link sm">Ver puntos sin CUPS →</a></div>
+            <div id="lsTipos" class="hbars"></div>
+          </div>
+        </div>
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-h"><h3>Altas por año<button class="info" type="button" aria-label="Qué significa" data-info="Puntos según el año de su fecha de activación.">i</button></h3><span class="muted sm">puntos</span></div>
+            <div class="chart" id="chAltas"></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Por provincia</h3><span class="muted sm">puntos · sin CUPS</span></div>
+            <div id="lsProv" class="hbars"></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- ---------- TABLAS ---------- -->
     <section class="vista hide" id="v-tablas">
       <div class="tabs" id="tabs" role="tablist">
-        <button data-t="bt">Facturas BT</button><button data-t="mt">Facturas MT</button><button data-t="cups">CUPS</button><button data-t="evos">evOS</button><button data-t="puntos">Puntos de recarga</button><button data-t="cruce">Cruce por CUPS</button><button data-t="analitico">Analítico</button>
+        <button data-t="bt">Facturas BT</button><button data-t="mt">Facturas MT</button><button data-t="cups">CUPS</button><button data-t="evos">evOS</button><button data-t="puntos">Puntos de recarga</button><button data-t="sincups">Puntos sin CUPS</button><button data-t="analitico">Analítico</button>
       </div>
       <div class="pane" data-p="bt mt">
 
@@ -292,9 +328,23 @@
         <p class="note">Puntos de carga según evOS, identificados por nº de serie + dirección + código postal (algunos nº de serie vienen estropeados en notación científica). La columna <b>CUPS</b> y los datos del activo (Business Model, Tipología, cuenta, estado) salen del maestro de puntos de recarga; «recuperado» indica que el nº de serie venía estropeado en evOS y se ha emparejado por número aproximado y código postal. «CUPS facturado: No» son puntos cuya luz no factura Endesa en este año.</p>
       </div>
       </div>
+      <div class="pane" data-p="sincups">
+      <div class="card">
+        <div class="toolbar">
+          <input type="search" id="sQ" placeholder="Buscar nº de serie, nombre, cuenta, dirección…">
+          <select id="sTipo" aria-label="Tipología"><option value="">Todas las tipologías</option></select>
+          <span class="grow"></span>
+          <span class="muted sm" id="sTotal"></span>
+          <button class="btn" id="sExport">Exportar Excel</button>
+        </div>
+        <div class="tbl-wrap big"><table class="tbl" id="tbSinCups"></table></div>
+        <p class="note">Puntos Public Infra del maestro sin un CUPS válido. Mientras no tengan CUPS no se pueden comparar con las facturas. Las columnas Sesiones y kWh son su actividad en evOS en el año: los que cargan mucho son los primeros a completar.</p>
+      </div>
+      </div>
       <div class="pane" data-p="cruce">
       <div class="card">
         <div class="toolbar">
+          <a href="#inicio/general" class="link sm">← Volver a Visión general</a>
           <select id="xMes" aria-label="Mes"></select>
           <input type="search" id="xQ" placeholder="Buscar CUPS o dirección…">
           <span class="grow"></span>
