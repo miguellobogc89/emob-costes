@@ -84,7 +84,7 @@
         <div id="genPanel">
           <div class="kpis">
             <div class="card hero">
-              <span class="lbl"><span>Facturado sin entregar</span><button class="info" type="button" aria-label="Qué significa" data-info="kWh que Endesa nos factura y que no llegan a ningún coche según evOS (pérdidas, consumo propio de los equipos, lecturas estimadas, errores de facturación…). Solo meses comparables: los que evOS cubre entero y tienen facturas.">i</button></span>
+              <span class="lbl"><span id="gDifLbl">Facturado sin entregar</span><button class="info" type="button" aria-label="Qué significa" data-info="kWh que Endesa nos factura y que no llegan a ningún coche según evOS (pérdidas, consumo propio de los equipos, lecturas estimadas, errores de facturación…). Solo meses comparables: los que evOS cubre entero y tienen facturas.">i</button></span>
               <div class="hero-val"><span id="gDif">—</span><small>MWh</small></div>
               <span class="delta" id="gDifPct"></span>
               <span class="muted sm" id="gMeses"></span>
@@ -101,7 +101,7 @@
               <div class="chart" id="chGen"></div>
             </div>
             <div class="card">
-              <div class="card-h"><h3>Diferencia por mes<button class="info" type="button" aria-label="Qué significa" data-info="Porcentaje de lo facturado que no aparece entregado en evOS. Solo meses comparables. Si de repente sube, algo pasa ese mes: revisar facturas o puntos sin datos en evOS. Si es negativo, se factura menos de lo que se entrega: falta alguna factura.">i</button></h3><span class="muted sm">% de lo facturado</span></div>
+              <div class="card-h"><h3>Diferencia por mes<button class="info" type="button" aria-label="Qué significa" data-info="(Facturado − entregado) ÷ facturado. Positivo: se factura energía que no llega a los coches. Negativo: evOS entrega más de lo facturado (faltan facturas o evOS incluye puntos que no factura Endesa). Solo meses comparables.">i</button></h3><span class="muted sm">% de lo facturado</span></div>
               <div class="chart" id="chGenPct"></div>
             </div>
           </div>

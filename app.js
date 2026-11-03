@@ -965,9 +965,11 @@ function pintarGeneral(d) {
   const sum = (k) => comp.reduce((a, m) => a + (m[k] || 0), 0);
   const F = sum('F'), E = sum('E'), N = sum('cN'), I = sum('cI');
   if (comp.length) {
-    $('#gDif').textContent = fN((F - E) / 1000, 1);
-    const pct = (F - E) / F * 100;
-    $('#gDifPct').innerHTML = `<span class="${pct < 0 ? 'up' : ''}">${fN(pct, 1)} % de lo facturado</span>`;
+    // siempre en positivo y con la etiqueta que toca: o sobra factura o sobra energía entregada
+    const mas = F >= E;
+    $('#gDifLbl').textContent = mas ? 'Facturado sin entregar' : 'Entregado sin facturar';
+    $('#gDif').textContent = fN(Math.abs(F - E) / 1000, 1);
+    $('#gDifPct').innerHTML = mas ? `${fN((F - E) / F * 100, 1)} % de lo facturado` : `evOS entrega un ${fN((E - F) / F * 100, 1)} % más de lo facturado`;
     $('#gMeses').textContent = `${comp.length} ${comp.length === 1 ? 'mes comparable' : 'meses comparables'}: ${comp.map((m) => m.label).join(', ')}`;
     $('#gFact').textContent = fN(F / 1000, 1); $('#gEvos').textContent = fN(E / 1000, 1);
     $('#gCoste').textContent = fN(N / E, 3) + ' €'; $('#gCosteSub').textContent = `por kWh entregado · ${fN(N / F, 3)} € por kWh facturado`;
@@ -994,9 +996,12 @@ function pintarGeneral(d) {
   // avisos
   const media = comp.length ? comp.reduce((a, m) => a + m.dif, 0) / comp.length : null;
   const av = [];
+  const bajo = comp.filter((m) => m.dif < 0);
+  if (bajo.length > 2) av.push(['alta', `En <b>${bajo.length} de ${comp.length}</b> meses comparables evOS entrega <b>más</b> energía de la facturada (de ${fN(-Math.max(...bajo.map((m) => m.dif)), 0)} % a ${fN(-Math.min(...bajo.map((m) => m.dif)), 0)} % más). Lo normal sería lo contrario: probablemente faltan facturas o evOS incluye puntos que no factura Endesa.`]);
   for (const m of meses) {
     const n = `<b>${m.label}</b>`;
-    if (m.comparable && m.dif < 0) av.push(['alta', `${n}: se factura <b>menos</b> de lo entregado (${fN(m.dif, 1)} %). Puede faltar alguna factura.`]);
+    if (bajo.length > 2 && m.dif < 0) { /* ya avisado arriba */ }
+    else if (m.comparable && m.dif < 0) av.push(['alta', `${n}: se factura <b>menos</b> de lo entregado (${fN(m.dif, 1)} %). Puede faltar alguna factura.`]);
     else if (m.comparable && media != null && comp.length > 2 && m.dif > media + 10) av.push(['alta', `${n}: diferencia del ${fN(m.dif, 1)} %, muy por encima de la media del año (${fN(media, 1)} %).`]);
     if (m.E && !m.completo) av.push(['', `${n}: evOS solo cubre ${m.dias} de ${m.dias_mes} días; no se compara.`]);
     if (m.F && !m.E && meses.some((x) => x.E && x.mes > m.mes)) av.push(['', `${n}: hay facturas pero no datos de evOS.`]);
