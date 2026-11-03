@@ -72,6 +72,58 @@
 
     <!-- ---------- INICIO ---------- -->
     <section class="vista" id="v-inicio">
+      <div class="tabs" id="tabsInicio" role="tablist">
+        <button data-t="general">Visión general</button><button data-t="facturas">Facturas</button><button data-t="evos">evOS</button>
+      </div>
+      <div class="pane" data-p="general">
+        <div id="genVacio" class="empty hide">
+          <h2>Faltan datos para comparar</h2>
+          <p id="genVacioTxt">Sube las facturas de Endesa y los ficheros de evOS en «Cargar datos».</p>
+          <a class="btn pri" href="#cargar">Cargar datos</a>
+        </div>
+        <div id="genPanel">
+          <div class="kpis">
+            <div class="card hero">
+              <span class="lbl"><span>Facturado sin entregar</span><button class="info" type="button" aria-label="Qué significa" data-info="kWh que Endesa nos factura y que no llegan a ningún coche según evOS (pérdidas, consumo propio de los equipos, lecturas estimadas, errores de facturación…). Solo meses comparables: los que evOS cubre entero y tienen facturas.">i</button></span>
+              <div class="hero-val"><span id="gDif">—</span><small>MWh</small></div>
+              <span class="delta" id="gDifPct"></span>
+              <span class="muted sm" id="gMeses"></span>
+            </div>
+            <div class="card tile"><span class="lbl">Facturado<button class="info" type="button" aria-label="Qué significa" data-info="kWh de todas las facturas (BT + MT), repartidos entre los días de su periodo para que cada mes encaje con evOS. Con las correcciones aplicadas.">i</button></span><b id="gFact">—</b><span class="muted sm">MWh · meses comparables</span></div>
+            <div class="card tile"><span class="lbl">Entregado según evOS<button class="info" type="button" aria-label="Qué significa" data-info="Suma de la energía de las sesiones de carga de evOS en los mismos meses.">i</button></span><b id="gEvos">—</b><span class="muted sm" id="gEvosSub">MWh · meses comparables</span></div>
+            <div class="card tile"><span class="lbl">Coste por kWh entregado<button class="info" type="button" aria-label="Qué significa" data-info="Importe facturado sin IVA dividido entre los kWh entregados según evOS: lo que de verdad cuesta cada kWh que llega a un coche. Debajo, el coste por kWh facturado, para comparar.">i</button></span><b id="gCoste">—</b><span class="muted sm" id="gCosteSub"></span></div>
+            <div class="card tile"><span class="lbl">Ingreso CPO frente a coste<button class="info" type="button" aria-label="Qué significa" data-info="«Total Amount CPO» de evOS (lo cobrado por las recargas) frente al importe facturado sin IVA, en los meses comparables. Las sesiones de MOE_ES_OCPI vienen a 0 € en evOS.">i</button></span><b id="gIngreso">—</b><span class="muted sm" id="gIngresoSub"></span></div>
+          </div>
+          <div class="grid g2-1">
+            <div class="card">
+              <div class="card-h"><h3>Energía facturada frente a entregada<button class="info" type="button" aria-label="Qué significa" data-info="Barras azules: kWh facturados (BT + MT) repartidos por los días de cada periodo. Barras naranjas: kWh entregados según evOS. Pasa el ratón para ver la diferencia y cuántos días del mes cubre evOS.">i</button></h3><span class="muted sm">kWh por mes</span></div>
+              <div class="leyenda"><span><i class="sw1"></i>Facturado (Endesa)</span><span><i class="sw2"></i>Entregado (evOS)</span></div>
+              <div class="chart" id="chGen"></div>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>Diferencia por mes<button class="info" type="button" aria-label="Qué significa" data-info="Porcentaje de lo facturado que no aparece entregado en evOS. Solo meses comparables. Si de repente sube, algo pasa ese mes: revisar facturas o puntos sin datos en evOS. Si es negativo, se factura menos de lo que se entrega: falta alguna factura.">i</button></h3><span class="muted sm">% de lo facturado</span></div>
+              <div class="chart" id="chGenPct"></div>
+            </div>
+          </div>
+          <div class="grid g2-1">
+            <div class="card">
+              <div class="card-h"><h3>Coste facturado frente a ingreso CPO<button class="info" type="button" aria-label="Qué significa" data-info="Barras azules: lo que factura Endesa sin IVA (repartido por días). Barras naranjas: lo cobrado por las recargas según evOS («Total Amount CPO»).">i</button></h3><span class="muted sm">€ por mes</span></div>
+              <div class="leyenda"><span><i class="sw1"></i>Coste facturado (sin IVA)</span><span><i class="sw2"></i>Ingreso CPO (evOS)</span></div>
+              <div class="chart" id="chGenEur"></div>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>Avisos<button class="info" type="button" aria-label="Qué significa" data-info="Meses que conviene revisar: diferencia muy por encima de la media del año, facturación por debajo de lo entregado, o meses sin datos de un lado.">i</button></h3></div>
+              <ul class="avisos" id="lsAvisos"></ul>
+            </div>
+          </div>
+          <div class="card pendiente">
+            <div class="card-h"><h3>Por CUPS</h3><span class="pill-bt">Pendiente</span></div>
+            <p class="muted">Aquí irán los CUPS con más diferencia entre lo facturado y lo entregado. Hace falta la tabla de equivalencia <b>nº de serie del punto de recarga → CUPS</b>; en cuanto la tengas, la cargamos y se activa.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane" data-p="facturas">
       <div id="vacio" class="empty hide">
         <h2>Todavía no hay facturas cargadas</h2>
         <p>Sube los Excels de facturación agrupada de Endesa para ver el dashboard.</p>
@@ -109,21 +161,6 @@
           </div>
         </div>
 
-        <div class="card hide" id="cardEvos" style="margin-top:16px">
-          <div class="card-h"><h3>Facturado frente a evOS<button class="info" type="button" aria-label="Qué significa" data-info="Barras azules: kWh facturados por Endesa (BT + MT, por mes de consumo, con las correcciones aplicadas). Barras naranjas: kWh entregados en las sesiones de carga registradas en evOS. Si el facturado supera mucho a lo entregado, hay energía que no llega a los coches (pérdidas, consumos propios de los equipos, lecturas estimadas…).">i</button></h3><a href="#tablas/puntos" class="link sm">Ver puntos de recarga →</a></div>
-          <div class="comp-stats" id="evStats"></div>
-          <div class="grid g2-1" style="margin-top:4px">
-            <div>
-              <div class="leyenda"><span><i class="sw1"></i>Facturado (Endesa, BT + MT)</span><span><i class="sw2"></i>Entregado (evOS)</span></div>
-              <div class="chart" id="chEvos"></div>
-            </div>
-            <div>
-              <div class="card-h"><h3 class="sm-h">Energía por comunidad (evOS)</h3></div>
-              <div id="lsEvReg" class="hbars"></div>
-            </div>
-          </div>
-        </div>
-
         <div class="grid g2">
           <div class="card">
             <div class="card-h"><h3>Desglose del coste<button class="info" type="button" aria-label="Qué significa" data-info="En qué se va el dinero: energía (los kWh), potencia contratada (fijo aunque no se use), exceso de potencia (penalización), alquiler del contador, impuesto eléctrico, otros conceptos (bono social, derechos de acceso) e IVA.">i</button></h3><span class="muted sm" id="hCostes"></span></div>
@@ -144,6 +181,53 @@
             <div class="card-h"><h3>Tipo de lectura<button class="info" type="button" aria-label="Qué significa" data-info="Cómo obtuvo la distribuidora el dato del contador: telemedida o telegestión (automático, fiable), visual (alguien fue a leerlo) o estimada (nadie lo leyó: es un cálculo). Las estimadas son las primeras a revisar.">i</button></h3><span class="muted sm">nº facturas</span></div>
             <div id="lsLecturas" class="hbars"></div>
             <p class="note" id="notaLect"></p>
+          </div>
+        </div>
+      </div>
+      </div>
+
+      <div class="pane" data-p="evos">
+        <div id="evVacio" class="empty hide">
+          <h2>No hay datos de evOS para este año</h2>
+          <p>Sube los ficheros de sesiones de evOS en «Cargar datos».</p>
+          <a class="btn pri" href="#cargar">Cargar datos</a>
+        </div>
+        <div id="evPanel">
+          <div class="kpis">
+            <div class="card hero">
+              <span class="lbl"><span id="eHeroLbl">Energía entregada</span><button class="info" type="button" aria-label="Qué significa" data-info="Suma de la energía de todas las sesiones de carga registradas en evOS en el año. 1 MWh = 1.000 kWh.">i</button></span>
+              <div class="hero-val"><span id="eKwh">—</span><small>MWh</small></div>
+              <span class="muted sm" id="eHeroSub"></span>
+            </div>
+            <div class="card tile"><span class="lbl">Sesiones de carga</span><b id="eSes">—</b><span class="muted sm" id="eSesSub"></span></div>
+            <div class="card tile"><span class="lbl">Horas de carga</span><b id="eHoras">—</b><span class="muted sm" id="eHorasSub"></span></div>
+            <div class="card tile"><span class="lbl">Carga rápida (DC)<button class="info" type="button" aria-label="Qué significa" data-info="Parte de la energía y de las sesiones que van por corriente continua (cargadores rápidos). El resto es AC.">i</button></span><b id="eDC">—</b><span class="muted sm" id="eDCSub"></span></div>
+            <div class="card tile"><span class="lbl">Puntos de recarga activos<button class="info" type="button" aria-label="Qué significa" data-info="Puntos distintos con alguna sesión en el año (nº de serie + dirección + código postal).">i</button></span><b id="ePuntos">—</b><span class="muted sm" id="ePuntosSub"></span></div>
+          </div>
+          <div class="grid g2">
+            <div class="card">
+              <div class="card-h"><h3>Energía por mes<button class="info" type="button" aria-label="Qué significa" data-info="kWh entregados cada mes, separando AC (carga normal) y DC (carga rápida).">i</button></h3><span class="muted sm">kWh</span></div>
+              <div class="leyenda"><span><i class="sw1"></i>AC</span><span><i class="sw2"></i>DC (rápida)</span></div>
+              <div class="chart" id="chEvMes"></div>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>Energía por día<button class="info" type="button" aria-label="Qué significa" data-info="kWh entregados cada día. Huecos o caídas bruscas suelen ser días sin fichero de evOS o incidencias en la red.">i</button></h3><span class="muted sm">kWh</span></div>
+              <div class="chart" id="chEvDia"></div>
+            </div>
+          </div>
+          <div class="grid g2">
+            <div class="card">
+              <div class="card-h"><h3>Energía por comunidad</h3><span class="muted sm">kWh</span></div>
+              <div id="lsEvReg" class="hbars"></div>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>Energía por CPO<button class="info" type="button" aria-label="Qué significa" data-info="Operador del punto de recarga según evOS (campo «CPO»).">i</button></h3><span class="muted sm">kWh</span></div>
+              <div id="lsEvCpo" class="hbars"></div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:16px">
+            <div class="card-h"><h3>Puntos de recarga con más energía</h3><a href="#tablas/puntos" class="link sm">Ver todos →</a></div>
+            <div class="tbl-wrap"><table class="tbl" id="tbEvTop"></table></div>
           </div>
         </div>
       </div>

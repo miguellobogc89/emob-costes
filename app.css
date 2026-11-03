@@ -305,3 +305,9 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .mini-h { margin: 6px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--mute); }
 .sm-h { font-size: 13px; }
 #cardEvos .chart { min-height: 240px; }
+.avisos { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.avisos li { padding: 8px 10px; border-radius: 8px; background: #f7f8fa; color: var(--ink-2); line-height: 1.4; }
+.avisos li.alta { background: #fdf0f0; color: var(--ink); border-left: 3px solid var(--danger); }
+.avisos li.ok { background: #eef8f2; color: var(--ink); }
+.card.pendiente { margin-top: 16px; border-style: dashed; }
+#v-inicio .pane > .kpis, #v-inicio .pane > div > .kpis { margin-top: 0; }

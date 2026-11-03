@@ -141,12 +141,12 @@ function barraSvg(svg, y, x0, bw, v, cls) {
   const p = svgEl('path', { d, class: cls }); svg.append(p); return p;
 }
 
-function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn, prev }) {
+function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn, prev, desdeCero = false, puntos = true }) {
   if (el.clientWidth < 80) return;
   const vals = data.map((d) => d.value).concat(prev || []).filter((v) => v != null);
   if (!vals.length) { el.innerHTML = '<p class="muted sm">Sin datos</p>'; return; }
   const lo = Math.min(...vals), hi = Math.max(...vals), pad = (hi - lo) * 0.25 || hi * 0.1 || 1;
-  const { svg, W, H, m } = frameRange(el, lo - pad, hi + pad, fmtAxis);
+  const { svg, W, H, m } = frameRange(el, desdeCero ? Math.min(0, lo) : lo - pad, hi + pad, fmtAxis);
   const band = (W - m.l - m.r) / data.length;
   const X = (i) => m.l + band * i + band / 2;
   // segmentos (se corta donde no hay dato)
@@ -169,7 +169,7 @@ function lineChart(el, data, { fmtAxis = fComp, fmtEnd, tipFn, prev }) {
   let last = -1;
   data.forEach((d, i) => {
     const lx = svgEl('text', { x: X(i), y: H - 8, 'text-anchor': 'middle' }); lx.textContent = d.label; svg.append(lx);
-    if (d.value != null) { svg.append(svgEl('circle', { class: 'dot', cx: X(i), cy: frame.yy(d.value), r: 4 })); last = i; }
+    if (d.value != null) { if (puntos) svg.append(svgEl('circle', { class: 'dot', cx: X(i), cy: frame.yy(d.value), r: 4 })); last = i; }
   });
   if (last >= 0 && fmtEnd) {
     const t = svgEl('text', { class: 'lbl-end', x: X(last), y: frame.yy(data[last].value) - 10, 'text-anchor': 'middle' });
@@ -225,7 +225,6 @@ async function cargarDashboard() {
   const guardado = LS.get(clave);
   if (ST.anio && !COMP) COMP = LS.get('comp.' + ST.anio);
   if (guardado && !guardado.vacio) mostrarDash(guardado); else skDashboard();
-  cargarEvosInicio();
   const [d] = await Promise.all([seguro(() => SB.rpc('dashboard', args())), ST.anio ? seguro(datosComp) : null]);
   if (pedido !== JSON.stringify(args())) return;      // el usuario cambió el filtro mientras cargaba
   if (!d) return;
@@ -237,7 +236,7 @@ let COMP_CAMBIO = false;
 
 function mostrarDash(d) {
   DASH = d;
-  if (ST.vista !== 'inicio') return;                  // se ha cambiado de pantalla mientras cargaba
+  if (ST.vista !== 'inicio' || ST.itab !== 'facturas') return;   // se ha cambiado de pantalla mientras cargaba
   if (!d.vacio) cargarCompMini(); else $('#cardComp').classList.add('hide');
   $('#vacio').classList.toggle('hide', !d.vacio);
   $('#dash').classList.toggle('hide', !!d.vacio);
@@ -909,44 +908,133 @@ async function guardarEvos(fich, log, prog) {
   } catch (e) { await SB.rest('DELETE', 'evos_lotes', { query: { id: 'eq.' + lote.id } }).catch(() => {}); throw e; }
 }
 
-// --- tarjeta de evOS en el inicio
+// --- Inicio: visión general (facturado frente a evOS) y pestaña evOS
 let EVOS = null;
+const skCols = () => `<div class="sk-cols">${ALTOS.map((h) => `<span class="sk" style="height:${h}%"></span>`).join('')}</div>`;
+function skEvos(tab) {
+  if (tab === 'general') {
+    for (const id of ['#gDif']) $(id).innerHTML = sk('140px', '44px');
+    for (const id of ['#gFact', '#gEvos', '#gCoste', '#gIngreso']) $(id).innerHTML = sk('100px', '26px');
+    for (const id of ['#gMeses', '#gCosteSub', '#gIngresoSub']) $(id).innerHTML = sk('80%');
+    $('#gDifPct').innerHTML = '';
+    for (const id of ['#chGen', '#chGenEur']) $(id).innerHTML = skCols();
+    $('#chGenPct').innerHTML = `<div class="sk-line"><span class="sk"></span><span class="sk onda"></span><span class="sk"></span><span class="sk"></span></div>`;
+    $('#lsAvisos').innerHTML = Array.from({ length: 4 }, () => `<li>${sk('85%')}</li>`).join('');
+  } else {
+    $('#eKwh').innerHTML = sk('140px', '44px'); $('#eHeroSub').innerHTML = sk('70%');
+    for (const id of ['#eSes', '#eHoras', '#eDC', '#ePuntos']) $(id).innerHTML = sk('100px', '26px');
+    for (const id of ['#eSesSub', '#eHorasSub', '#eDCSub', '#ePuntosSub']) $(id).innerHTML = sk('80%');
+    $('#chEvMes').innerHTML = skCols();
+    $('#chEvDia').innerHTML = `<div class="sk-line"><span class="sk"></span><span class="sk onda"></span><span class="sk"></span><span class="sk"></span></div>`;
+    const filas = (n) => Array.from({ length: n }, (_, i) => `<div class="hb"><span class="n">${sk('70%')}</span><span class="t">${sk([95, 60, 40, 30, 20, 10][i % 6] + '%', '14px')}</span><span class="v">${sk('90px')}</span></div>`).join('');
+    $('#lsEvReg').innerHTML = filas(6); $('#lsEvCpo').innerHTML = filas(4);
+    skTabla($('#tbEvTop'), 6, 5);
+  }
+}
 async function cargarEvosInicio() {
-  const anio = ST.anio ?? new Date().getFullYear();
+  const anio = ST.anio ?? new Date().getFullYear(), tab = ST.itab;
   const clave = 'evos.' + anio, g = LS.get(clave);
-  if (g) pintarEvos(g);
+  if (g && g.diario) pintarEvosInicio(g); else skEvos(tab);
   const d = await seguro(() => SB.rpc('evos_dashboard', { p_anio: anio }));
   if (!d) return;
   LS.set(clave, d);
-  if ((ST.anio ?? new Date().getFullYear()) === anio) pintarEvos(d);
+  if ((ST.anio ?? new Date().getFullYear()) === anio) pintarEvosInicio(d);
 }
-function pintarEvos(d) {
+function pintarEvosInicio(d) {
   EVOS = d;
   if (ST.vista !== 'inicio') return;
+  if (ST.itab === 'general') pintarGeneral(d); else if (ST.itab === 'evos') pintarEvosTab(d);
+}
+/** Mes comparable: evOS cubre todos sus días y hay facturas repartidas en él. */
+function mesesGenerales(d) {
+  return d.mensual.map((m) => {
+    const F = m.pro_kwh == null ? null : +m.pro_kwh, E = m.kwh == null ? null : +m.kwh;
+    const completo = m.dias >= m.dias_mes, comparable = completo && F > 0 && E > 0;
+    return { ...m, label: MESES[m.mes - 1], F, E, a: F, b: E, completo, comparable, dif: comparable ? (F - E) / F * 100 : null,
+      cN: m.pro_neto == null ? null : +m.pro_neto, cI: m.importe == null ? null : +m.importe };
+  });
+}
+function pintarGeneral(d) {
+  const meses = mesesGenerales(d), comp = meses.filter((m) => m.comparable);
+  const hayE = +d.kpi.sesiones > 0, hayF = meses.some((m) => m.F);
+  $('#genVacio').classList.toggle('hide', hayE && hayF); $('#genPanel').classList.toggle('hide', !(hayE && hayF));
+  if (!(hayE && hayF)) {
+    $('#genVacioTxt').textContent = !hayE && !hayF ? `No hay facturas ni datos de evOS de ${d.anio}.` : !hayE ? `No hay datos de evOS de ${d.anio}: súbelos en «Cargar datos».` : `No hay facturas de ${d.anio}.`;
+    return;
+  }
+  const sum = (k) => comp.reduce((a, m) => a + (m[k] || 0), 0);
+  const F = sum('F'), E = sum('E'), N = sum('cN'), I = sum('cI');
+  if (comp.length) {
+    $('#gDif').textContent = fN((F - E) / 1000, 1);
+    const pct = (F - E) / F * 100;
+    $('#gDifPct').innerHTML = `<span class="${pct < 0 ? 'up' : ''}">${fN(pct, 1)} % de lo facturado</span>`;
+    $('#gMeses').textContent = `${comp.length} ${comp.length === 1 ? 'mes comparable' : 'meses comparables'}: ${comp.map((m) => m.label).join(', ')}`;
+    $('#gFact').textContent = fN(F / 1000, 1); $('#gEvos').textContent = fN(E / 1000, 1);
+    $('#gCoste').textContent = fN(N / E, 3) + ' €'; $('#gCosteSub').textContent = `por kWh entregado · ${fN(N / F, 3)} € por kWh facturado`;
+    $('#gIngreso').textContent = fN(I / N * 100, 0) + ' %';
+    $('#gIngresoSub').textContent = `${fEur(I)} cobrados frente a ${fEur(N)} facturados`;
+  } else {
+    $('#gDif').textContent = '—'; $('#gDifPct').innerHTML = '';
+    $('#gMeses').textContent = 'Aún no hay ningún mes con evOS completo y facturas';
+    for (const id of ['#gFact', '#gEvos', '#gCoste', '#gIngreso']) $(id).textContent = '—';
+    $('#gCosteSub').textContent = ''; $('#gIngresoSub').textContent = '';
+  }
+  const tip = (m) => tipRows(`${m.label} ${d.anio}`, [
+    ['Facturado', m.F == null ? 'sin facturas' : fN(m.F) + ' kWh'],
+    ['Entregado (evOS)', m.E == null ? 'sin datos' : fN(m.E) + ' kWh'],
+    ['Días con evOS', `${m.dias} de ${m.dias_mes}`],
+    ['Diferencia', m.comparable ? `${fN(m.F - m.E)} kWh · ${fN(m.dif, 1)} %` : m.F && m.E ? 'mes incompleto en evOS' : '—'],
+  ]);
+  groupedChart($('#chGen'), meses, { tipFn: tip });
+  lineChart($('#chGenPct'), meses.map((m) => ({ ...m, value: m.dif })), { fmtAxis: (v) => fN(v, 0) + ' %', fmtEnd: (v) => fN(v, 1) + ' %', tipFn: tip });
+  groupedChart($('#chGenEur'), meses.map((m) => ({ ...m, a: m.cN, b: m.cI })), {
+    tipFn: (m) => tipRows(`${m.label} ${d.anio}`, [['Coste facturado', m.cN == null ? '—' : fEur(m.cN)], ['Ingreso CPO', m.cI == null ? '—' : fEur(m.cI)],
+      ['Días con evOS', `${m.dias} de ${m.dias_mes}`], ['Ingreso / coste', m.cN && m.cI && m.completo ? fN(m.cI / m.cN * 100, 0) + ' %' : '—']]),
+  });
+  // avisos
+  const media = comp.length ? comp.reduce((a, m) => a + m.dif, 0) / comp.length : null;
+  const av = [];
+  for (const m of meses) {
+    const n = `<b>${m.label}</b>`;
+    if (m.comparable && m.dif < 0) av.push(['alta', `${n}: se factura <b>menos</b> de lo entregado (${fN(m.dif, 1)} %). Puede faltar alguna factura.`]);
+    else if (m.comparable && media != null && comp.length > 2 && m.dif > media + 10) av.push(['alta', `${n}: diferencia del ${fN(m.dif, 1)} %, muy por encima de la media del año (${fN(media, 1)} %).`]);
+    if (m.E && !m.completo) av.push(['', `${n}: evOS solo cubre ${m.dias} de ${m.dias_mes} días; no se compara.`]);
+    if (m.F && !m.E && meses.some((x) => x.E && x.mes > m.mes)) av.push(['', `${n}: hay facturas pero no datos de evOS.`]);
+    if (m.E && !m.F) av.push(['', `${n}: hay sesiones en evOS pero aún no hay facturas de ese mes.`]);
+  }
+  $('#lsAvisos').innerHTML = av.length ? av.map(([c, t]) => `<li class="${c}">${t}</li>`).join('') : '<li class="ok">Nada que destacar: todos los meses comparables están en línea con la media.</li>';
+}
+function pintarEvosTab(d) {
   const k = d.kpi, hay = +k.sesiones > 0;
-  $('#cardEvos').classList.toggle('hide', !hay);
+  $('#evVacio').classList.toggle('hide', hay); $('#evPanel').classList.toggle('hide', !hay);
   if (!hay) return;
-  const comp = d.mensual.filter((m) => m.kwh && m.fact_kwh);
-  const kE = comp.reduce((a, m) => a + +m.kwh, 0), kF = comp.reduce((a, m) => a + +m.fact_kwh, 0);
-  $('#evStats').innerHTML = [
-    ['Energía entregada (evOS)', `${fN(k.kwh / 1000, 1)} MWh`, `del ${fFecha(k.desde)} al ${fFecha(k.hasta)}`],
-    ['Sesiones de carga', fN(k.sesiones), `${fN(k.kwh / k.sesiones, 1)} kWh por sesión`],
-    ['Facturado / entregado', comp.length ? fN(kF / kE * 100, 1) + ' %' : '—', comp.length ? `${comp.length} ${comp.length === 1 ? 'mes' : 'meses'} con ambos datos` : 'sin meses con facturas y evOS a la vez'],
-    ['Puntos de recarga activos', fN(k.puntos), `${fN(k.kwh ? k.kwh_dc / k.kwh * 100 : 0, 1)} % de la energía en DC`],
-  ].map(([t, v, sub]) => `<div><span class="k">${t}</span><span class="v">${v}</span><span class="s">${sub}</span></div>`).join('');
-  const meses = d.mensual.map((m) => ({ ...m, label: MESES[m.mes - 1], a: m.fact_kwh == null ? null : +m.fact_kwh, b: m.kwh == null ? null : +m.kwh }));
-  groupedChart($('#chEvos'), meses, {
-    tipFn: (m) => tipRows(`${m.label} ${d.anio}`, [
-      ['Facturado', m.a == null ? 'sin facturas' : fN(m.a) + ' kWh'],
-      ['Entregado (evOS)', m.b == null ? 'sin datos' : fN(m.b) + ' kWh'],
-      ['Sesiones', m.sesiones == null ? '—' : fN(m.sesiones)],
-      ['Facturado / entregado', m.a && m.b ? fN(m.a / m.b * 100, 1) + ' %' : '—'],
-    ]),
+  $('#eHeroLbl').textContent = `Energía entregada · ${d.anio}`;
+  $('#eKwh').textContent = fN(k.kwh / 1000, 1);
+  $('#eHeroSub').textContent = `Sesiones del ${fFecha(k.desde)} al ${fFecha(k.hasta)}`;
+  $('#eSes').textContent = fN(k.sesiones); $('#eSesSub').textContent = `${fN(k.kwh / k.sesiones, 1)} kWh por sesión`;
+  $('#eHoras').textContent = fN(k.horas); $('#eHorasSub').textContent = `${fN(k.horas * 60 / k.sesiones, 0)} min por sesión de media`;
+  $('#eDC').textContent = fN(k.kwh ? k.kwh_dc / k.kwh * 100 : 0, 1) + ' %'; $('#eDCSub').textContent = `de la energía · ${fN(k.sesiones ? k.ses_dc / k.sesiones * 100 : 0, 1)} % de las sesiones`;
+  $('#ePuntos').textContent = fN(k.puntos); $('#ePuntosSub').textContent = `${fN(k.kwh / k.puntos / 1000, 1)} MWh por punto`;
+  const meses = d.mensual.map((m) => ({ ...m, label: MESES[m.mes - 1], a: m.kwh == null ? null : m.kwh - (m.kwh_dc || 0), b: m.kwh_dc == null ? null : +m.kwh_dc }));
+  groupedChart($('#chEvMes'), meses, {
+    tipFn: (m) => tipRows(`${m.label} ${d.anio}`, [['AC', m.a == null ? '—' : fN(m.a) + ' kWh'], ['DC (rápida)', m.b == null ? '—' : fN(m.b) + ' kWh'],
+      ['Sesiones', m.sesiones == null ? '—' : fN(m.sesiones)], ['Días con datos', `${m.dias} de ${m.dias_mes}`]]),
   });
+  const DS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  const dias = d.diario.map((x) => ({ ...x, value: +x.kwh, label: '' }));
+  const paso = Math.max(1, Math.ceil(dias.length / 12));
+  dias.forEach((x, i) => { if (i % paso === 0) x.label = fFecha(x.dia).slice(0, 5); });
+  lineChart($('#chEvDia'), dias, { desdeCero: true, puntos: dias.length <= 40, fmtEnd: (v) => fComp(v), tipFn: (x) => tipRows(`${DS[new Date(x.dia + 'T12:00').getDay()]} ${fFecha(x.dia)}`, [['Energía', fN(x.kwh) + ' kWh'], ['Sesiones', fN(x.sesiones)], ['DC', fN(x.kwh_dc || 0) + ' kWh']]) });
   hbars($('#lsEvReg'), d.regiones.slice(0, 10).map((r) => ({ ...r, label: r.region || 'Sin comunidad', value: +r.kwh })), {
-    fmtV: (r) => `${fN(r.value / 1000, 1)} MWh`,
-    tipFn: (r) => tipRows(r.label, [['Energía', fN(r.value) + ' kWh'], ['Sesiones', fN(r.sesiones)], ['Puntos', fN(r.puntos)]]),
+    fmtV: (r) => `${fN(r.value / 1000, 1)} MWh`, tipFn: (r) => tipRows(r.label, [['Energía', fN(r.value) + ' kWh'], ['Sesiones', fN(r.sesiones)], ['Puntos', fN(r.puntos)]]),
   });
+  hbars($('#lsEvCpo'), d.cpos.slice(0, 8).map((r) => ({ ...r, label: r.cpo || 'Sin CPO', value: +r.kwh })), {
+    fmtV: (r) => `${fN(r.value / 1000, 1)} MWh`, tipFn: (r) => tipRows(r.label, [['Energía', fN(r.value) + ' kWh'], ['Sesiones', fN(r.sesiones)], ['Puntos', fN(r.puntos)], ['Importe CPO', fEur(r.importe)]]),
+  });
+  $('#tbEvTop').classList.remove('loading');
+  $('#tbEvTop').innerHTML = `<thead><tr><th>Punto</th><th>Tipo</th><th class="num">kWh</th><th class="num">Sesiones</th><th class="num">kWh/sesión</th><th class="num">Importe CPO</th></tr></thead><tbody>` +
+    d.puntos.map((p) => `<tr><td class="wrap"><b>${esc(p.direccion || '—')}</b><br><span class="muted sm">${esc([p.cp, p.ciudad].filter(Boolean).join(' '))} · nº serie ${esc(p.serial || '—')}</span></td>
+      <td>${esc(p.ac_dc || '')}${p.potencia ? ` · ${fN(p.potencia)} kW` : ''}</td><td class="num">${fN(p.kwh)}</td><td class="num">${fN(p.sesiones)}</td><td class="num">${fN(p.kwh / p.sesiones, 1)}</td><td class="num">${fEur(p.importe)}</td></tr>`).join('') + '</tbody>';
 }
 
 // --- tabla evOS (mes × punto)
@@ -1099,6 +1187,8 @@ const TITULOS = {
   cargar: ['Cargar datos', 'Facturas de Endesa, ficheros de evOS y analítico del equipo, en un solo sitio'],
   correcciones: ['Correcciones', 'Reglas para corregir cómo cuentan algunas facturas'],
 };
+const ITABS = { general: 'Facturado frente a lo entregado según evOS', facturas: 'Resumen de consumo y coste de las facturas de Endesa', evos: 'Sesiones de carga registradas en evOS' };
+ST.itab = 'general';
 const TABS = {
   bt: 'Líneas de factura de baja tensión (tarifas 2.0TD / 3.0TD), sin duplicados',
   mt: 'Líneas de factura de media tensión (tarifas 6.x), sin duplicados',
@@ -1116,24 +1206,30 @@ function mostrarVista(v) {
   let [vista, tab] = v.split('/');
   if (!TITULOS[vista]) vista = 'inicio';
   if (vista === 'tablas') { ST.tab = TABS[tab] ? tab : ST.tab; if (location.hash.slice(1) !== 'tablas/' + ST.tab) history.replaceState(null, '', '#tablas/' + ST.tab); }
+  if (vista === 'inicio') { ST.itab = ITABS[tab] ? tab : ST.itab; if (location.hash.slice(1) !== 'inicio/' + ST.itab) history.replaceState(null, '', '#inicio/' + ST.itab); }
   ST.vista = vista;
   $$('nav a').forEach((a) => a.classList.toggle('on', a.dataset.v === vista));
   $$('.vista').forEach((s) => s.classList.toggle('hide', s.id !== 'v-' + vista));
   $('#titulo').textContent = TITULOS[vista][0];
-  $('#subtitulo').textContent = vista === 'tablas' ? TABS[ST.tab] : TITULOS[vista][1];
+  $('#subtitulo').textContent = vista === 'tablas' ? TABS[ST.tab] : vista === 'inicio' ? ITABS[ST.itab] : TITULOS[vista][1];
+  if (vista === 'inicio') {
+    $$('#tabsInicio button').forEach((b) => b.classList.toggle('on', b.dataset.t === ST.itab));
+    $$('#v-inicio .pane').forEach((p) => p.classList.toggle('hide', p.dataset.p !== ST.itab));
+  }
   if (vista === 'tablas') {
     $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === ST.tab));
     $$('#v-tablas .pane').forEach((p) => p.classList.toggle('hide', !p.dataset.p.split(' ').includes(ST.tab)));
   }
   // filtros de arriba según lo que se ve
-  const conFact = vista === 'inicio' || (vista === 'tablas' && ['bt', 'mt', 'cups'].includes(ST.tab));
+  const iFact = vista === 'inicio' && ST.itab === 'facturas';
+  const conFact = iFact || (vista === 'tablas' && ['bt', 'mt', 'cups'].includes(ST.tab));
   $('#filtros').classList.toggle('hide', !['inicio', 'tablas'].includes(vista));
   $('#segBase').classList.toggle('hide', !conFact);
-  $('#segTension').classList.toggle('hide', !(vista === 'inicio' || (vista === 'tablas' && ST.tab === 'cups')));
-  if (vista === 'inicio') skDashboard();
+  $('#segTension').classList.toggle('hide', !(iFact || (vista === 'tablas' && ST.tab === 'cups')));
+  if (iFact) skDashboard();
 }
 function refrescar() {
-  if (ST.vista === 'inicio') cargarDashboard();
+  if (ST.vista === 'inicio') { if (ST.itab === 'facturas') cargarDashboard(); else cargarEvosInicio(); }
   else if (ST.vista === 'cargar') cargarDatosCargar();
   else if (ST.vista === 'correcciones') cargarCorrecciones();
   else if (ST.vista === 'tablas') {
@@ -1266,11 +1362,11 @@ function init() {
   // filtros
   $$('#segBase button').forEach((b) => b.onclick = async () => {
     $$('#segBase button').forEach((x) => x.classList.toggle('on', x === b));
-    ST.base = b.dataset.b; ST.f.pag = 1; if (ST.vista === 'inicio') skDashboard(); await refrescarAnios(); guardarFiltros(); refrescar();
+    ST.base = b.dataset.b; ST.f.pag = 1; if (ST.vista === 'inicio' && ST.itab === 'facturas') skDashboard(); await refrescarAnios(); guardarFiltros(); refrescar();
   });
   $$('#segTension button').forEach((b) => b.onclick = async () => {
     $$('#segTension button').forEach((x) => x.classList.toggle('on', x === b));
-    ST.tension = b.dataset.t; ST.f.pag = 1; if (ST.vista === 'inicio') skDashboard(); await refrescarAnios(); guardarFiltros(); refrescar();
+    ST.tension = b.dataset.t; ST.f.pag = 1; if (ST.vista === 'inicio' && ST.itab === 'facturas') skDashboard(); await refrescarAnios(); guardarFiltros(); refrescar();
   });
   $('#selAnio').onchange = (e) => { ST.anio = e.target.value ? +e.target.value : null; ST.todo = !e.target.value; ST.f.pag = 1; guardarFiltros(); refrescar(); };
   let t; const deb = (fn) => () => { clearTimeout(t); t = setTimeout(fn, 300); };
@@ -1299,6 +1395,7 @@ function init() {
     for (const en of items) await walk(en, '');
     encolar(acc);
   });
+  $$('#tabsInicio button').forEach((b) => b.onclick = () => { location.hash = 'inicio/' + b.dataset.t; });
   // tablas
   $$('#tabs button').forEach((b) => b.onclick = () => { location.hash = 'tablas/' + b.dataset.t; });
   $('#eQ').oninput = deb(() => { ST.e.pag = 1; cargarEvAgg(); });
@@ -1316,8 +1413,8 @@ function init() {
   };
 
   let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => {
-    if (ST.vista === 'inicio' && DASH && !DASH.vacio) pintarDashboard();
-    if (ST.vista === 'inicio' && EVOS) pintarEvos(EVOS);
+    if (ST.vista === 'inicio' && ST.itab === 'facturas' && DASH && !DASH.vacio) pintarDashboard();
+    if (ST.vista === 'inicio' && ST.itab !== 'facturas' && EVOS) pintarEvosInicio(EVOS);
     if (ST.vista === 'tablas' && ST.tab === 'analitico' && COMP?.carga) cargarComparativa();
   }, 150); });
   addEventListener('hashchange', () => { if (!$('#appRoot').classList.contains('hide')) irA(location.hash.slice(1)); });

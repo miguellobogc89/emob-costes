@@ -532,6 +532,8 @@ create table if not exists public.cache_mes (
   ie numeric, otros numeric, iva numeric, facturas bigint, filas bigint
 );
 create index if not exists cache_mes_idx on public.cache_mes (base, anio, tension);
+-- Facturas repartidas por días de su periodo (para comparar mes a mes con evOS)
+create table if not exists public.cache_prorr (anio int, mes int, tension text, kwh numeric, neto numeric, total numeric);
 create table if not exists public.cache_cups (
   base text not null, anio int, tension text, cups text,
   direccion text, distribuidora text, tarifa text, ult date,
@@ -558,6 +560,11 @@ drop policy if exists ci_leer on public.cache_info;
 create policy cm_leer on public.cache_mes  for select to authenticated using (true);
 create policy cc_leer on public.cache_cups for select to authenticated using (true);
 create policy ci_leer on public.cache_info for select to authenticated using (true);
+alter table public.cache_prorr enable row level security;
+drop policy if exists cp_leer on public.cache_prorr;
+create policy cp_leer on public.cache_prorr for select to authenticated using (true);
+revoke all on public.cache_prorr from anon;
+grant select on public.cache_prorr to authenticated;
 revoke all on public.cache_mes, public.cache_cups, public.cache_info from anon;
 grant select on public.cache_mes, public.cache_cups, public.cache_info to authenticated;
 
@@ -630,7 +637,22 @@ begin
   left join (select distinct on (cups) cups, direccion, distribuidora, tarifa
              from pg_temp._cache_src where cups is not null and cuenta
              order by cups, fecha_hasta desc nulls last) d on d.cups = g.cups;
+  -- reparto por días: cada fila se divide entre los meses de su periodo según los días que caen en cada uno
+  -- (periodos raros —sin inicio, al revés o de más de 400 días— van enteros al mes en que terminan)
+  delete from public.cache_prorr where true;
+  insert into public.cache_prorr (anio, mes, tension, kwh, neto, total)
+  select extract(year from m.m)::int, extract(month from m.m)::int, f.tension,
+         round(sum(f.kwh * w.w)::numeric, 4), round(sum(f.imp_neto * w.w)::numeric, 4), round(sum(f.imp_total * w.w)::numeric, 4)
+  from pg_temp._cache_src f
+  cross join lateral (select case when f.fecha_desde is not null and f.fecha_hasta - f.fecha_desde between 0 and 400
+                                  then f.fecha_desde else f.fecha_hasta end d0, f.fecha_hasta d1) p
+  cross join lateral generate_series(date_trunc('month', p.d0), date_trunc('month', p.d1), interval '1 month') m(m)
+  cross join lateral (select (least(p.d1, (m.m + interval '1 month')::date - 1) - greatest(p.d0, m.m::date) + 1)::float8
+                             / (p.d1 - p.d0 + 1) w) w
+  where f.cuenta and f.fecha_hasta is not null and (v_min is null or extract(year from m.m) >= v_min)
+  group by 1, 2, 3;
   drop table if exists pg_temp._cache_src;
+
   return jsonb_build_object('ms', round(extract(epoch from clock_timestamp() - t0) * 1000));
 end;
 $$;
@@ -935,10 +957,15 @@ $$;
 create or replace function public.evos_dashboard(p_anio int)
 returns jsonb language sql stable as $$
   with a as (select * from public.evos_agg where anio = p_anio),
-  fac as (
+  fac as (   -- por mes de fin de periodo (como el resto del dashboard)
     select mes, sum(kwh) kwh, sum(neto) neto from public.cache_mes
     where base = 'consumo' and anio = p_anio group by mes
-  )
+  ),
+  pro as (   -- repartido por días del periodo facturado
+    select mes, sum(kwh) kwh, sum(neto) neto, sum(total) total from public.cache_prorr where anio = p_anio group by mes
+  ),
+  dias as (select extract(month from dia)::int mes, count(distinct dia) dias from public.evos_dia
+           where dia >= make_date(p_anio, 1, 1) and dia < make_date(p_anio + 1, 1, 1) group by 1)
   select jsonb_build_object(
     'anio', p_anio,
     'anios', (select coalesce(jsonb_agg(distinct anio order by anio desc), '[]') from public.evos_agg),
@@ -946,22 +973,37 @@ returns jsonb language sql stable as $$
               'kwh', coalesce(sum(kwh), 0), 'sesiones', coalesce(sum(sesiones), 0), 'importe', coalesce(sum(importe), 0),
               'horas', coalesce(sum(segundos), 0) / 3600.0,
               'puntos', count(distinct punto), 'kwh_dc', coalesce(sum(kwh) filter (where ac_dc = 'DC'), 0),
+              'ses_dc', coalesce(sum(sesiones) filter (where ac_dc = 'DC'), 0),
               'desde', min(primera), 'hasta', max(ultima)) from a),
     'mensual', (select jsonb_agg(jsonb_build_object('mes', g.mes, 'kwh', x.kwh, 'sesiones', x.sesiones, 'importe', x.importe,
-                                                    'kwh_dc', x.kwh_dc, 'fact_kwh', fac.kwh, 'fact_neto', fac.neto) order by g.mes)
+                                                    'kwh_dc', x.kwh_dc, 'ses_dc', x.ses_dc, 'horas', x.horas,
+                                                    'dias', coalesce(d.dias, 0),
+                                                    'dias_mes', extract(day from (make_date(p_anio, g.mes, 1) + interval '1 month' - interval '1 day'))::int,
+                                                    'fact_kwh', fac.kwh, 'fact_neto', fac.neto,
+                                                    'pro_kwh', pro.kwh, 'pro_neto', pro.neto, 'pro_total', pro.total) order by g.mes)
                 from generate_series(1, 12) g(mes)
-                left join (select mes, sum(kwh) kwh, sum(sesiones) sesiones, sum(importe) importe,
-                                  sum(kwh) filter (where ac_dc = 'DC') kwh_dc from a group by mes) x on x.mes = g.mes
-                left join fac on fac.mes = g.mes),
+                left join (select mes, sum(kwh) kwh, sum(sesiones) sesiones, sum(importe) importe, sum(segundos) / 3600.0 horas,
+                                  sum(kwh) filter (where ac_dc = 'DC') kwh_dc, sum(sesiones) filter (where ac_dc = 'DC') ses_dc
+                           from a group by mes) x on x.mes = g.mes
+                left join fac on fac.mes = g.mes
+                left join pro on pro.mes = g.mes
+                left join dias d on d.mes = g.mes),
+    'diario', (select coalesce(jsonb_agg(t order by t.dia), '[]') from (
+                 select dia, sum(kwh) kwh, sum(sesiones) sesiones, sum(kwh) filter (where ac_dc = 'DC') kwh_dc
+                 from public.evos_dia where dia >= make_date(p_anio, 1, 1) and dia < make_date(p_anio + 1, 1, 1) group by dia) t),
     'regiones', (select coalesce(jsonb_agg(r order by r.kwh desc), '[]') from (
                    select region, sum(kwh) kwh, sum(sesiones) sesiones, count(distinct punto) puntos from a group by region) r),
+    'cpos', (select coalesce(jsonb_agg(r order by r.kwh desc), '[]') from (
+               select nullif(cpo, '') cpo, sum(kwh) kwh, sum(sesiones) sesiones, sum(importe) importe, count(distinct punto) puntos
+               from a group by 1) r),
     'puntos', (select coalesce(jsonb_agg(p order by p.kwh desc), '[]') from (
                  select punto, max(serial) serial, max(direccion) direccion, max(ciudad) ciudad, max(provincia) provincia,
                         max(cp) cp, string_agg(distinct ac_dc, '/') ac_dc, max(potencia) potencia,
                         sum(kwh) kwh, sum(sesiones) sesiones, sum(importe) importe
-                 from a group by punto order by sum(kwh) desc limit 300) p)
+                 from a group by punto order by sum(kwh) desc limit 10) p)
   );
 $$;
+
 -- Puntos de recarga (evOS) de un año, uno por punto
 create or replace function public.evos_puntos(p_anio int)
 returns jsonb language sql stable as $$
