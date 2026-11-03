@@ -1094,7 +1094,7 @@ function pintarEvosTab(d) {
 
 // --- tabla evOS (mes × punto)
 const E_COLS = [
-  ['mes', 'Mes', 'm'], ['serial', 'Nº serie'], ['direccion', 'Dirección', 'w'], ['cp', 'CP'], ['ciudad', 'Ciudad'], ['provincia', 'Provincia'],
+  ['mes', 'Mes', 'm'], ['serial_ok', 'Nº serie'], ['direccion', 'Dirección', 'w'], ['cp', 'CP'], ['ciudad', 'Ciudad'], ['provincia', 'Provincia'],
   ['region', 'Comunidad'], ['ac_dc', 'AC/DC'], ['potencia', 'Potencia kW', 'n'], ['cpo', 'CPO'], ['empresa', 'Empresa'],
   ['sesiones', 'Sesiones', 'n'], ['kwh', 'kWh', 'n2'], ['segundos', 'Horas de carga', 'h'],
   ['primera', 'Primera sesión', 't'], ['ultima', 'Última sesión', 't'],
@@ -1104,7 +1104,7 @@ const fHora = (ts) => (ts ? fFecha(ts) + ' ' + ts.slice(11, 16) : '');
 function queryEvos() {
   const q = { anio: 'eq.' + (ST.anio ?? new Date().getFullYear()) };
   const t = $('#eQ').value.trim().replace(/[",()]/g, ' ');
-  if (t) q.or = `(${['serial', 'direccion', 'ciudad', 'cp', 'provincia', 'region'].map((c) => `${c}.ilike."*${t}*"`).join(',')})`;
+  if (t) q.or = `(${['serial_ok', 'direccion', 'ciudad', 'cp', 'provincia', 'region'].map((c) => `${c}.ilike."*${t}*"`).join(',')})`;
   q.order = `${ST.e.orden}.${ST.e.dir}.nullslast,punto`;
   return q;
 }
@@ -1121,7 +1121,7 @@ function celdaEv(f, k, n) {
 async function cargarEvAgg() {
   const tb = $('#tbEvAgg'); skTabla(tb, 12);
   const q = { ...queryEvos(), select: 'anio,' + E_COLS.map((c) => c[0]).join(','), limit: 50, offset: (ST.e.pag - 1) * 50 };
-  const r = await seguro(() => SB.select('evos_agg', q, { count: true }));
+  const r = await seguro(() => SB.select('evos_agg_v', q, { count: true }));
   tb.classList.remove('loading');
   if (!r) return;
   tb.innerHTML = `<thead><tr>${E_COLS.map(([k, t, n]) => `<th data-c="${k}" class="${n && n !== 'w' && n !== 'm' && n !== 't' ? 'num' : ''}">${t}${ST.e.orden === k ? `<span class="ar">${ST.e.dir === 'desc' ? '↓' : '↑'}</span>` : ''}</th>`).join('')}</tr></thead><tbody>` +
@@ -1147,7 +1147,7 @@ async function exportarEvAgg(e) {
   const bt = e.currentTarget, txt = bt.textContent; bt.disabled = true;
   try {
     const q = { ...queryEvos(), select: 'anio,' + E_COLS.map((c) => c[0]).join(',') };
-    const filas = await SB.todo((limit, offset) => SB.select('evos_agg', { ...q, limit, offset }), (n) => { bt.textContent = `Descargando… ${fN(n)}`; });
+    const filas = await SB.todo((limit, offset) => SB.select('evos_agg_v', { ...q, limit, offset }), (n) => { bt.textContent = `Descargando… ${fN(n)}`; });
     const aoa = [E_COLS.map((c) => c[1])].concat(filas.map((f) => E_COLS.map(([k, , n]) =>
       n === 'm' ? `${f.anio}-${pad(f.mes)}` : n === 't' ? tsASerial(f[k]) : n === 'h' ? Math.round(f[k] / 36) / 100 : (n ? (f[k] == null ? null : +f[k]) : f[k]))));
     descargar(hojaFechaHora(aoa, E_COLS.map((c, i) => (c[2] === 't' ? i : -1)).filter((i) => i >= 0)), 'evOS', `evos_${ST.anio ?? ''}_${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -1297,6 +1297,8 @@ async function cargarPuntosEv() {
     (vis.length ? vis.map((f) => `<tr>${U_COLS.map(([k, , n]) => {
       const v = f[k];
       if (k === 'kwh') return `<td class="num"><span class="inbar" style="width:${Math.max(0, (v / max) * 60)}px"></span>${fN(v)}</td>`;
+      if (k === 'serial') return /E\+/i.test(v) ? `<td>${esc(v)} <span class="tag exc" title="evOS trae este nº de serie estropeado (notación científica) y no se ha podido identificar en el maestro">incompleto en evOS</span></td>`
+        : `<td>${esc(v)}${f.serial_evos ? ` <span class="tag sust" title="En evOS venía como ${esc(f.serial_evos)}">corregido</span>` : ''}</td>`;
       if (k === 'cups20') return v ? `<td class="cups">${esc(v)}${f.metodo === 'recuperado' ? ' <span class="tag sust" title="Nº de serie estropeado en evOS: emparejado por número aproximado y código postal">recuperado</span>' : ''}</td>`
         : `<td class="muted sm">${f.metodo === 'sin_cups' ? 'sin CUPS en el maestro' : 'no está en el maestro'}</td>`;
       if (n === 'b') return `<td>${f.cups20 ? (v ? 'Sí' : '<span class="tag exc">No</span>') : ''}</td>`;

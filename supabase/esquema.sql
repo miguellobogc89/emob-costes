@@ -1026,18 +1026,22 @@ returns jsonb language sql stable as $$
                select nullif(cpo, '') cpo, sum(kwh) kwh, sum(sesiones) sesiones, sum(importe) importe, count(distinct punto) puntos
                from a group by 1) r),
     'puntos', (select coalesce(jsonb_agg(p order by p.kwh desc), '[]') from (
-                 select punto, max(serial) serial, max(direccion) direccion, max(ciudad) ciudad, max(provincia) provincia,
-                        max(cp) cp, string_agg(distinct ac_dc, '/') ac_dc, max(potencia) potencia,
-                        sum(kwh) kwh, sum(sesiones) sesiones, sum(importe) importe
-                 from a group by punto order by sum(kwh) desc limit 10) p)
+                 select min(a.punto) punto, coalesce(max(e.serial_cruce), max(a.serial)) serial, max(a.direccion) direccion, max(a.ciudad) ciudad,
+                        max(a.provincia) provincia, max(a.cp) cp, string_agg(distinct a.ac_dc, '/') ac_dc, max(a.potencia) potencia,
+                        sum(a.kwh) kwh, sum(a.sesiones) sesiones, sum(a.importe) importe
+                 from a left join public.evos_cups e on e.punto = a.punto
+                 group by coalesce(e.serial_cruce, a.punto) order by sum(a.kwh) desc limit 10) p)
   );
 $$;
 
 -- Puntos de recarga (evOS) de un año, uno por punto
 create or replace function public.evos_puntos(p_anio int)
 returns jsonb language sql stable as $$
+  -- un punto por nº de serie real: si evOS lo trae estropeado (6,2E+13) y se ha recuperado, se junta con el bueno
   select coalesce(jsonb_agg(p order by p.kwh desc), '[]') from (
-    select a.punto, max(a.serial) serial, max(a.direccion) direccion, max(a.cp) cp, max(a.ciudad) ciudad, max(a.provincia) provincia,
+    select min(a.punto) punto, coalesce(max(e.serial_cruce), max(a.serial)) serial,
+           string_agg(distinct a.serial, ', ') filter (where a.serial ~* 'E\+') serial_evos,
+           max(a.direccion) direccion, max(a.cp) cp, max(a.ciudad) ciudad, max(a.provincia) provincia,
            max(a.region) region, string_agg(distinct nullif(a.ac_dc, ''), '/') ac_dc, max(a.potencia) potencia,
            string_agg(distinct nullif(a.cpo, ''), ', ') cpo, count(distinct a.mes) meses,
            sum(a.sesiones) sesiones, round(sum(a.kwh), 3) kwh, round(sum(a.importe), 2) importe,
@@ -1047,8 +1051,13 @@ returns jsonb language sql stable as $$
            exists (select 1 from public.cache_prorr_cups f where f.anio = p_anio and f.cups20 = max(e.cups20) and f.kwh <> 0) facturado
     from public.evos_agg a left join public.evos_cups e on e.punto = a.punto
     left join public.puntos_recarga pr on pr.numero_serie = e.serial_cruce
-    where a.anio = p_anio group by a.punto) p;
+    where a.anio = p_anio group by coalesce(e.serial_cruce, a.punto)) p;
 $$;
+-- evos_agg con el nº de serie corregido (para la tabla evOS)
+create or replace view public.evos_agg_v with (security_invoker = true) as
+  select a.*, coalesce(e.serial_cruce, a.serial) serial_ok from public.evos_agg a left join public.evos_cups e on e.punto = a.punto;
+grant select on public.evos_agg_v to authenticated;
+revoke all on public.evos_agg_v from anon;
 grant execute on function public.evos_preparar(date[]), public.evos_dashboard(int), public.evos_puntos(int) to authenticated;
 revoke execute on function public.evos_preparar(date[]), public.evos_dashboard(int), public.evos_puntos(int) from anon, public;
 
