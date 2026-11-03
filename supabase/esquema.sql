@@ -539,6 +539,12 @@ create table if not exists public.cache_info (
   actualizado timestamptz, filas bigint, facturas bigint, excluidas bigint, negativas bigint, sustituidas bigint
 );
 create index if not exists facturas_pend_idx on public.facturas (huella) where doc_agrupada is null;
+-- Índice «de cobertura»: copia estrecha con solo las columnas que usan los resúmenes. Así el
+-- recálculo lee este índice (≈ 1/5 del tamaño) en lugar de la tabla con la fila original completa.
+create index if not exists facturas_resumen_idx on public.facturas (huella) include
+  (fecha_hasta, fecha_emision, tarifa, estado, tipo_lectura, cups, fecha_desde, direccion, distribuidora, id_factura,
+   excluida, negativa, sustituida, kwh, kwh_p1, kwh_p2, kwh_p3, kwh_p4, kwh_p5, kwh_p6,
+   imp_neto, imp_total, imp_energia, imp_potencia, imp_exceso, imp_alquiler, imp_ie, imp_otros, imp_iva);
 alter table public.cache_mes  enable row level security;
 alter table public.cache_cups enable row level security;
 alter table public.cache_info enable row level security;
@@ -555,26 +561,35 @@ create or replace function public.refrescar_cache()
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare t0 timestamptz := clock_timestamp();
 begin
-  -- Una sola lectura de las facturas (con correcciones) a una tabla temporal estrecha.
-  -- Importes en coma flotante (sumar es mucho más rápido; se redondea a 4 decimales) y una marca
+  -- UNA sola lectura de la tabla de facturas (con correcciones y marcas) a una tabla temporal estrecha.
+  -- De ahí salen los resúmenes por mes, por CUPS, las direcciones y los contadores generales.
+  -- Importes en coma flotante (sumar es mucho más rápido; se redondea a 4 decimales) y marcas
   -- «primera fila de cada factura» para contar facturas sin COUNT(DISTINCT), que obliga a ordenar.
   drop table if exists pg_temp._cache_src;
   create temp table _cache_src on commit drop as
-  select f.fecha_hasta, f.fecha_emision, f.tension, f.estado, f.tipo_lectura, f.cups, f.fecha_desde,
-         (f.id_factura is not null and row_number() over (partition by f.id_factura order by f.huella) = 1) primera,
-         f.kwh::float8 kwh, f.kwh_p1::float8 kwh_p1, f.kwh_p2::float8 kwh_p2, f.kwh_p3::float8 kwh_p3,
-         f.kwh_p4::float8 kwh_p4, f.kwh_p5::float8 kwh_p5, f.kwh_p6::float8 kwh_p6,
-         f.imp_neto::float8 imp_neto, f.imp_total::float8 imp_total, f.imp_energia::float8 imp_energia,
-         f.imp_potencia::float8 imp_potencia, f.imp_exceso::float8 imp_exceso, f.imp_alquiler::float8 imp_alquiler,
-         f.imp_ie::float8 imp_ie, f.imp_otros::float8 imp_otros, f.imp_iva::float8 imp_iva
-  from public.facturas_ok f;
+  select t.*,
+         (t.id_factura is not null and row_number() over (partition by t.id_factura order by t.huella) = 1) pri_todas,
+         (t.cuenta and t.id_factura is not null
+            and row_number() over (partition by t.id_factura, t.cuenta order by t.huella) = 1) primera
+  from (
+    select f.fecha_hasta, f.fecha_emision, f.tension, f.estado, f.tipo_lectura, f.cups, f.fecha_desde,
+           f.direccion, f.distribuidora, f.tarifa, f.id_factura, f.huella,
+           f.excluida, f.negativa, f.sustituida, (not f.excluida and not f.sustituida) cuenta,
+           f.kwh::float8 kwh, f.kwh_p1::float8 kwh_p1, f.kwh_p2::float8 kwh_p2, f.kwh_p3::float8 kwh_p3,
+           f.kwh_p4::float8 kwh_p4, f.kwh_p5::float8 kwh_p5, f.kwh_p6::float8 kwh_p6,
+           f.imp_neto::float8 imp_neto, f.imp_total::float8 imp_total, f.imp_energia::float8 imp_energia,
+           f.imp_potencia::float8 imp_potencia, f.imp_exceso::float8 imp_exceso, f.imp_alquiler::float8 imp_alquiler,
+           f.imp_ie::float8 imp_ie, f.imp_otros::float8 imp_otros, f.imp_iva::float8 imp_iva
+    from public.facturas_calc f
+  ) t;
 
-  -- última dirección / distribuidora / tarifa conocida de cada CUPS
-  drop table if exists pg_temp._cache_dir;
-  create temp table _cache_dir on commit drop as
-  select distinct on (cups) cups, direccion, distribuidora, tarifa
-  from public.facturas_ok where cups is not null
-  order by cups, fecha_hasta desc nulls last;
+  -- contadores generales (todas las filas)
+  insert into public.cache_info (id, actualizado, filas, facturas, excluidas, negativas, sustituidas)
+  select 1, now(), count(*), count(*) filter (where pri_todas),
+         count(*) filter (where excluida), count(*) filter (where negativa), count(*) filter (where sustituida)
+  from pg_temp._cache_src
+  on conflict (id) do update set actualizado = excluded.actualizado, filas = excluded.filas, facturas = excluded.facturas,
+    excluidas = excluded.excluidas, negativas = excluded.negativas, sustituidas = excluded.sustituidas;
 
   delete from public.cache_mes where true;
   delete from public.cache_cups where true;
@@ -589,6 +604,7 @@ begin
   from pg_temp._cache_src f
   cross join (values ('consumo'), ('emision')) b(base)
   cross join lateral (select case when b.base = 'emision' then f.fecha_emision else f.fecha_hasta end fecha) x
+  where f.cuenta
   group by 1, 2, 3, 4, 5, 6;
   insert into public.cache_cups
   select g.base, g.anio, g.tension, g.cups, d.direccion, d.distribuidora, d.tarifa, g.hasta,
@@ -602,19 +618,13 @@ begin
     from pg_temp._cache_src f
     cross join (values ('consumo'), ('emision')) b(base)
     cross join lateral (select case when b.base = 'emision' then f.fecha_emision else f.fecha_hasta end fecha) x
+    where f.cuenta
     group by 1, 2, 3, 4
   ) g
-  left join pg_temp._cache_dir d on d.cups = g.cups;
-  insert into public.cache_info (id, actualizado, filas, facturas, excluidas, negativas, sustituidas)
-  select 1, now(), count(*), count(*) filter (where primera_id), count(*) filter (where excluida),
-         count(*) filter (where negativa), count(*) filter (where sustituida)
-  from (select excluida, negativa, sustituida,
-               id_factura is not null and row_number() over (partition by id_factura order by huella) = 1 primera_id
-        from public.facturas) t
-  on conflict (id) do update set actualizado = excluded.actualizado, filas = excluded.filas, facturas = excluded.facturas,
-    excluidas = excluded.excluidas, negativas = excluded.negativas, sustituidas = excluded.sustituidas;
+  left join (select distinct on (cups) cups, direccion, distribuidora, tarifa
+             from pg_temp._cache_src where cups is not null and cuenta
+             order by cups, fecha_hasta desc nulls last) d on d.cups = g.cups;
   drop table if exists pg_temp._cache_src;
-  drop table if exists pg_temp._cache_dir;
   return jsonb_build_object('ms', round(extract(epoch from clock_timestamp() - t0) * 1000));
 end;
 $$;
@@ -842,7 +852,7 @@ revoke execute on function public.comparativa(int) from anon, public;
 
 -- ---------------------------------------------------------------- ajustes finales
 -- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)
-alter role authenticated set statement_timeout = '30s';
+alter role authenticated set statement_timeout = '60s';
 notify pgrst, 'reload config';
 notify pgrst, 'reload schema';
 
