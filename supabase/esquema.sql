@@ -728,9 +728,12 @@ begin
   end if;
 
   if p_anio is not null then
+    -- año anterior solo si hay datos y no queda por debajo de «Mostrar desde el año»
     select count(*) > 0 into v_hay_prev from public.cache_mes
-    where base = p_base and anio = p_anio - 1 and (p_tension is null or tension = p_tension);
-    select case when sum(facturas) >= 0.5 * v_fact then
+    where base = p_base and anio = p_anio - 1 and (p_tension is null or tension = p_tension)
+      and p_anio - 1 >= coalesce((select case when activa and valor ~ '^\d{4}$' then valor::int end
+                                  from public.opciones where clave = 'anio_minimo'), 0);
+    select case when v_hay_prev and sum(facturas) >= 0.5 * v_fact then
              jsonb_build_object('kwh', coalesce(sum(kwh), 0), 'neto', coalesce(sum(neto), 0), 'total', coalesce(sum(total), 0),
                                 'meses', to_jsonb(v_meses))
            end
@@ -855,6 +858,112 @@ returns jsonb language sql stable as $$
 $$;
 grant execute on function public.comparativa(int) to authenticated;
 revoke execute on function public.comparativa(int) from anon, public;
+
+
+-- ---------------------------------------------------------------- evOS (sistema técnico)
+-- Sesiones de carga exportadas de evOS. Se guardan AGREGADAS por mes y punto de carga
+-- (no sesión a sesión: no cabría) y sin datos personales (tarjeta, cliente, vehículo).
+-- Cada fichero subido es un «lote»; si se vuelve a subir un periodo, sustituye al anterior.
+create table if not exists public.evos_lotes (
+  id            bigint generated always as identity primary key,
+  archivo       text,
+  desde         date,
+  hasta         date,
+  dias          date[] not null,
+  sesiones      int,
+  kwh           numeric,
+  importe       numeric,
+  fecha         timestamptz not null default now(),
+  usuario_email text default (auth.jwt() ->> 'email')
+);
+create table if not exists public.evos_agg (
+  lote_id   bigint not null references public.evos_lotes(id) on delete cascade,
+  anio      int, mes int,
+  punto     text,             -- serie · dirección · CP (la serie viene a veces estropeada por Excel)
+  serial    text, ac_dc text, cpo text, empresa text,
+  region    text, provincia text, ciudad text, cp text, direccion text,
+  potencia  numeric, sesiones int, kwh numeric, importe numeric, segundos bigint,
+  primera   timestamp, ultima timestamp
+);
+create index if not exists evos_agg_lote_idx on public.evos_agg (lote_id);
+create index if not exists evos_agg_mes_idx  on public.evos_agg (anio, mes);
+create table if not exists public.evos_dia (
+  lote_id  bigint not null references public.evos_lotes(id) on delete cascade,
+  dia      date, ac_dc text, region text,
+  sesiones int, kwh numeric, importe numeric
+);
+create index if not exists evos_dia_idx on public.evos_dia (dia);
+create index if not exists evos_lotes_dias_idx on public.evos_lotes using gin (dias);
+
+alter table public.evos_lotes enable row level security;
+alter table public.evos_agg   enable row level security;
+alter table public.evos_dia   enable row level security;
+drop policy if exists el_leer on public.evos_lotes;  drop policy if exists el_ins on public.evos_lotes;  drop policy if exists el_del on public.evos_lotes;
+drop policy if exists ea_leer on public.evos_agg;    drop policy if exists ea_ins on public.evos_agg;
+drop policy if exists ed_leer on public.evos_dia;    drop policy if exists ed_ins on public.evos_dia;
+create policy el_leer on public.evos_lotes for select to authenticated using (true);
+create policy el_ins  on public.evos_lotes for insert to authenticated with check (true);
+create policy el_del  on public.evos_lotes for delete to authenticated using (public.es_admin());
+create policy ea_leer on public.evos_agg   for select to authenticated using (true);
+create policy ea_ins  on public.evos_agg   for insert to authenticated with check (true);
+create policy ed_leer on public.evos_dia   for select to authenticated using (true);
+create policy ed_ins  on public.evos_dia   for insert to authenticated with check (true);
+revoke all on public.evos_lotes, public.evos_agg, public.evos_dia from anon;
+grant select, insert, delete on public.evos_lotes to authenticated;
+grant select, insert on public.evos_agg, public.evos_dia to authenticated;
+
+-- Al subir un fichero: lotes ya guardados que se solapan con sus días.
+-- Si todos sus días están dentro del fichero nuevo, se sustituyen (se borran aquí);
+-- si solo se solapan en parte, no se toca nada y se devuelven para avisar.
+create or replace function public.evos_preparar(p_dias date[])
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_parciales jsonb; v_borrados int;
+begin
+  select coalesce(jsonb_agg(jsonb_build_object('archivo', archivo, 'desde', desde, 'hasta', hasta)), '[]')
+    into v_parciales
+  from public.evos_lotes where dias && p_dias and not (dias <@ p_dias);
+  if jsonb_array_length(v_parciales) > 0 then
+    return jsonb_build_object('ok', false, 'parciales', v_parciales);
+  end if;
+  with b as (delete from public.evos_lotes where dias && p_dias and dias <@ p_dias returning 1)
+  select count(*) into v_borrados from b;
+  return jsonb_build_object('ok', true, 'sustituidos', v_borrados);
+end;
+$$;
+
+-- Panel de evOS para un año: totales, meses (con lo facturado al lado), regiones y puntos
+create or replace function public.evos_dashboard(p_anio int)
+returns jsonb language sql stable as $$
+  with a as (select * from public.evos_agg where anio = p_anio),
+  fac as (
+    select mes, sum(kwh) kwh, sum(neto) neto from public.cache_mes
+    where base = 'consumo' and anio = p_anio group by mes
+  )
+  select jsonb_build_object(
+    'anio', p_anio,
+    'anios', (select coalesce(jsonb_agg(distinct anio order by anio desc), '[]') from public.evos_agg),
+    'kpi', (select jsonb_build_object(
+              'kwh', coalesce(sum(kwh), 0), 'sesiones', coalesce(sum(sesiones), 0), 'importe', coalesce(sum(importe), 0),
+              'horas', coalesce(sum(segundos), 0) / 3600.0,
+              'puntos', count(distinct punto), 'kwh_dc', coalesce(sum(kwh) filter (where ac_dc = 'DC'), 0),
+              'desde', min(primera), 'hasta', max(ultima)) from a),
+    'mensual', (select jsonb_agg(jsonb_build_object('mes', g.mes, 'kwh', x.kwh, 'sesiones', x.sesiones, 'importe', x.importe,
+                                                    'kwh_dc', x.kwh_dc, 'fact_kwh', fac.kwh, 'fact_neto', fac.neto) order by g.mes)
+                from generate_series(1, 12) g(mes)
+                left join (select mes, sum(kwh) kwh, sum(sesiones) sesiones, sum(importe) importe,
+                                  sum(kwh) filter (where ac_dc = 'DC') kwh_dc from a group by mes) x on x.mes = g.mes
+                left join fac on fac.mes = g.mes),
+    'regiones', (select coalesce(jsonb_agg(r order by r.kwh desc), '[]') from (
+                   select region, sum(kwh) kwh, sum(sesiones) sesiones, count(distinct punto) puntos from a group by region) r),
+    'puntos', (select coalesce(jsonb_agg(p order by p.kwh desc), '[]') from (
+                 select punto, max(serial) serial, max(direccion) direccion, max(ciudad) ciudad, max(provincia) provincia,
+                        max(cp) cp, string_agg(distinct ac_dc, '/') ac_dc, max(potencia) potencia,
+                        sum(kwh) kwh, sum(sesiones) sesiones, sum(importe) importe
+                 from a group by punto order by sum(kwh) desc limit 300) p)
+  );
+$$;
+grant execute on function public.evos_preparar(date[]), public.evos_dashboard(int) to authenticated;
+revoke execute on function public.evos_preparar(date[]), public.evos_dashboard(int) from anon, public;
 
 -- ---------------------------------------------------------------- ajustes finales
 -- Más margen para consultas pesadas (por defecto Supabase corta a los 8 s)

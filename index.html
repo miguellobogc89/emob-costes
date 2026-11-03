@@ -38,7 +38,7 @@
       <a href="#facturas" data-v="facturas"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>Facturas</a>
       <a href="#cups" data-v="cups"><svg viewBox="0 0 24 24"><path d="M7 21V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v16M5 21h13M16 9h2a1 1 0 0 1 1 1v6a1.5 1.5 0 0 0 3 0V8l-2-2M12 7l-2 4h3l-2 4"/></svg>CUPS</a>
       <a href="#comparativa" data-v="comparativa"><svg viewBox="0 0 24 24"><path d="M12 4v16M5 8h14M5 8l-3 7a3 3 0 0 0 6 0zM19 8l-3 7a3 3 0 0 0 6 0zM8 20h8"/></svg>Comparativa</a>
-      <a href="#cruce" data-v="cruce"><svg viewBox="0 0 24 24"><path d="M4 7h11l-3-3M20 17H9l3 3"/></svg>Cruce sistema técnico<span class="pill">Pronto</span></a>
+      <a href="#evos" data-v="evos"><svg viewBox="0 0 24 24"><path d="M7 21V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v16M5 21h13M16 9h2a1 1 0 0 1 1 1v6a1.5 1.5 0 0 0 3 0V8l-2-2M12 7l-2 4h3l-2 4"/></svg>evOS</a>
       <div class="sep"></div>
       <a href="#correcciones" data-v="correcciones"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></svg>Correcciones</a>
       <a href="#cargar" data-v="cargar"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg>Cargar datos</a>
@@ -201,20 +201,60 @@
       </div>
     </section>
 
-    <!-- ---------- CRUCE ---------- -->
-    <section class="vista hide" id="v-cruce">
-      <div class="card soon">
-        <span class="pill big">Próximamente</span>
-        <h2>Cruce con los consumos del sistema técnico</h2>
-        <p class="muted">Aquí se importarán las lecturas del sistema técnico y se compararán, CUPS a CUPS, con lo facturado por Endesa.</p>
-        <div class="steps">
-          <div><b>1 · Importar</b><span>Fichero del sistema técnico con CUPS (o punto de recarga asociado), fecha y kWh entregados.</span></div>
-          <div><b>2 · Emparejar</b><span>Por CUPS y por periodo de facturación (fecha desde – hasta).</span></div>
-          <div><b>3 · Comparar</b><span>kWh facturados vs. kWh medidos, desviación % y €/kWh real por CUPS.</span></div>
-          <div><b>4 · Alertar</b><span>CUPS con desvíos, lecturas estimadas o excesos de potencia recurrentes.</span></div>
-        </div>
-        <p class="note">Cuando tengas una muestra del fichero del sistema técnico, lo conectamos aquí.</p>
+    <!-- ---------- evOS ---------- -->
+    <section class="vista hide" id="v-evos">
+      <div id="evVacio" class="empty hide">
+        <h2>Todavía no hay datos de evOS</h2>
+        <p>Sube los ficheros de sesiones que exportas de evOS (CSV o Excel). Puedes subir varios a la vez.</p>
       </div>
+      <div id="evPanel">
+        <div class="kpis">
+          <div class="card hero">
+            <span class="lbl"><span id="evHeroLbl">Energía entregada según evOS</span><button class="info" type="button" aria-label="Qué significa" data-info="Suma de la energía de todas las sesiones de carga registradas en evOS en el año (lo que reciben los coches). 1 MWh = 1.000 kWh.">i</button></span>
+            <div class="hero-val"><span id="evKwh">—</span><small>MWh</small></div>
+            <span class="muted sm" id="evHeroSub"></span>
+          </div>
+          <div class="card tile"><span class="lbl">Sesiones de carga</span><b id="evSes">—</b><span class="muted sm" id="evSesSub"></span></div>
+          <div class="card tile"><span class="lbl">Facturado / evOS<button class="info" type="button" aria-label="Qué significa" data-info="kWh facturados por Endesa (BT + MT, por mes de consumo) divididos entre los kWh entregados según evOS, en los meses que hay en ambos. Por encima del 100 %: se factura más energía de la que llega a los coches (pérdidas, consumos propios de los equipos, lecturas estimadas…).">i</button></span><b id="evRatio">—</b><span class="muted sm" id="evRatioSub"></span></div>
+          <div class="card tile"><span class="lbl">Importe CPO<button class="info" type="button" aria-label="Qué significa" data-info="Suma del campo «Total Amount CPO» de las sesiones: lo cobrado por las recargas según evOS.">i</button></span><b id="evImp">—</b><span class="muted sm" id="evImpSub"></span></div>
+          <div class="card tile"><span class="lbl">Puntos de carga activos<button class="info" type="button" aria-label="Qué significa" data-info="Puntos distintos con alguna sesión (número de serie + dirección + código postal). Algunos números de serie vienen estropeados por Excel en notación científica; por eso se usa también la dirección.">i</button></span><b id="evPuntos">—</b><span class="muted sm" id="evDC"></span></div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="card-h"><h3>Energía por mes: evOS frente a facturas<button class="info" type="button" aria-label="Qué significa" data-info="Barras naranjas: kWh entregados en las sesiones de evOS. Barras azules: kWh facturados por Endesa (BT + MT, por mes de consumo, con las reglas de corrección aplicadas). Pasa el ratón para ver la relación entre ambos.">i</button></h3><span class="muted sm">kWh · por mes</span></div>
+          <div class="leyenda"><span><i class="sw1"></i>Facturado (Endesa, BT + MT)</span><span><i class="sw2"></i>Entregado (evOS)</span></div>
+          <div class="chart" id="chEvos"></div>
+        </div>
+        <div class="grid g1-2">
+          <div class="card">
+            <div class="card-h"><h3>Energía por comunidad</h3><span class="muted sm">kWh · sesiones</span></div>
+            <div id="lsEvReg" class="hbars"></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Puntos con más energía</h3><span class="muted sm" id="evPtsTot"></span></div>
+            <div class="tbl-wrap" style="max-height:420px"><table class="tbl" id="tbEvPts"></table></div>
+          </div>
+        </div>
+      </div>
+      <div class="grid g2-1">
+        <div class="card">
+          <div class="card-h"><h3>Cargar ficheros de evOS</h3><span class="muted sm">.csv · .xlsx · .zip</span></div>
+          <div id="evDrop" class="drop">
+            <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg>
+            <p><b>Arrastra aquí</b> los ficheros de sesiones de evOS</p>
+            <div class="row"><label class="btn">Elegir ficheros<input id="evFiles" type="file" multiple accept=".csv,.xlsx,.xls,.zip" hidden></label></div>
+          </div>
+          <ul id="evCola" class="cola"></ul>
+          <div class="row end"><button class="btn" id="evLimpiar">Limpiar</button><button class="btn pri" id="evProcesar" disabled>Procesar y guardar</button></div>
+          <div id="evProgreso" class="hide"><div class="barra"><span id="evBar"></span></div><p class="muted sm" id="evProgTxt"></p></div>
+          <pre id="evLog" class="hide"></pre>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>Ficheros cargados</h3></div>
+          <p class="note">Se guarda un resumen por mes y punto de carga (no cada sesión) y sin datos personales: tarjeta, cliente y vehículo no se guardan. Si vuelves a subir un periodo ya cargado, sustituye al anterior.</p>
+          <div class="tbl-wrap" style="max-height:360px"><table class="tbl" id="tbEvLotes"></table></div>
+        </div>
+      </div>
+      <p class="note">Para el cruce <b>CUPS a CUPS</b> con las facturas hará falta una tabla de equivalencia punto de carga → CUPS (evOS no trae el CUPS).</p>
     </section>
 
     <!-- ---------- CORRECCIONES ---------- -->

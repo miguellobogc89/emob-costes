@@ -225,3 +225,101 @@ function leerAnalitico(datos) {
   }
   throw new Error('No parece el Excel del analítico: no encuentro los bloques «BT» / «MT» en la columna A.');
 }
+
+// ---------------------------------------------------------------- evOS
+/** Separa una línea CSV respetando comillas. */
+function camposCSV(linea, sep) {
+  const out = []; let cur = '', q = false;
+  for (let i = 0; i < linea.length; i++) {
+    const ch = linea[i];
+    if (q) { if (ch === '"') { if (linea[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === sep) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur); return out;
+}
+/** Filas (arrays de texto) de un fichero de evOS: CSV (; o ,) o Excel. */
+async function filasEvos(nombre, datos) {
+  if (/\.(xlsx|xlsm|xls)$/i.test(nombre)) {
+    const wb = XLSX.read(datos, { type: 'array', raw: true, cellText: true, cellDates: false });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    return XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  }
+  let txt = new TextDecoder('utf-8').decode(datos);
+  if (txt.includes('�')) txt = new TextDecoder('windows-1252').decode(datos);   // por si viene en ANSI
+  txt = txt.replace(/^﻿/, '');
+  const lineas = txt.split(/\r?\n/).filter((l) => l.trim() !== '');
+  const sep = (lineas[0].match(/;/g) || []).length >= (lineas[0].match(/,/g) || []).length ? ';' : ',';
+  return lineas.map((l) => camposCSV(l, sep));
+}
+const numEvos = (v) => {
+  let t = String(v ?? '').trim(); if (!t || t === '-') return null;
+  if (t.includes(',') && !t.includes('.')) t = t.replace(',', '.');
+  const n = Number(t); return isFinite(n) ? n : null;
+};
+/** '25/10/2026 23:58' (o con segundos) -> {dia:'2026-10-25', ts:'2026-10-25 23:58:00'} */
+function fechaEvos(v) {
+  const m = String(v ?? '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) { const iso = String(v ?? '').match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/); if (!iso) return null;
+    return { dia: `${iso[1]}-${iso[2]}-${iso[3]}`, ts: `${iso[1]}-${iso[2]}-${iso[3]} ${iso[4] || '00'}:${iso[5] || '00'}:${iso[6] || '00'}` }; }
+  const d = `${m[3]}-${pad(m[2])}-${pad(m[1])}`;
+  return { dia: d, ts: `${d} ${pad(m[4] || 0)}:${m[5] || '00'}:${m[6] || '00'}` };
+}
+const segundosEvos = (v) => { const m = String(v ?? '').match(/(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?/); return m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0; };
+
+
+// Comunidad autónoma a partir del código postal (evOS trae la región en varios idiomas y a veces con la ciudad)
+const CCAA_CP = (() => {
+  const g = { 'Andalucía': '04 11 14 18 21 23 29 41', 'Aragón': '22 44 50', 'Principado de Asturias': '33', 'Illes Balears': '07', 'Canarias': '35 38',
+    'Cantabria': '39', 'Castilla-La Mancha': '02 13 16 19 45', 'Castilla y León': '05 09 24 34 37 40 42 47 49', 'Cataluña': '08 17 25 43',
+    'Comunitat Valenciana': '03 12 46', 'Extremadura': '06 10', 'Galicia': '15 27 32 36', 'Comunidad de Madrid': '28', 'Región de Murcia': '30',
+    'Navarra': '31', 'País Vasco': '01 20 48', 'La Rioja': '26', 'Ceuta': '51', 'Melilla': '52' };
+  const m = {}; for (const [n, l] of Object.entries(g)) for (const c of l.split(' ')) m[c] = n; return m;
+})();
+const cpEvos = (v) => { const t = String(v ?? '').trim(); return /^\d{4}$/.test(t) ? '0' + t : t; };
+
+/** Lee un fichero de evOS y devuelve sus agregados (por mes y punto, y por día) sin datos personales. */
+async function leerEvos(nombre, datos, log) {
+  const filas = await filasEvos(nombre, datos);
+  if (filas.length < 2) throw new Error(`${nombre}: está vacío`);
+  const H = filas[0].map(norm);
+  const col = (...nombres) => { for (const n of nombres) { const i = H.indexOf(norm(n)); if (i >= 0) return i; } return -1; };
+  const c = {
+    id: col('Session ID'), ini: col('Session start', 'Charging Start'), kwh: col('Energy consumption'),
+    serial: col('Serial number'), acdc: col('Type of recharge(AC/DC)', 'Type of recharge'), cpo: col('CPO'), emp: col('Company code'),
+    reg: col('Region'), prov: col('Province'), ciu: col('City'), cp: col('Postal Code'), dir: col('Address'),
+    pot: col('Nominal Power', 'Max station power'), imp: col('Total Amount CPO'), dur: col('Session duration'), st: col('Status'),
+  };
+  if (c.id < 0 || c.ini < 0 || c.kwh < 0) throw new Error(`${nombre}: no parece un fichero de evOS (faltan «Session ID», «Session start» o «Energy consumption»)`);
+  const vistos = new Set(); const agg = new Map(); const dias = new Map(); let n = 0, dup = 0, malas = 0, kwhT = 0, impT = 0;
+  const t = (r, i) => (i >= 0 ? String(r[i] ?? '').trim() : '');
+  for (let k = 1; k < filas.length; k++) {
+    const r = filas[k]; const id = t(r, c.id);
+    if (!id) continue;
+    if (vistos.has(id)) { dup++; continue; } vistos.add(id);
+    const f = fechaEvos(r[c.ini]); const kwh = numEvos(r[c.kwh]);
+    if (!f || kwh == null) { malas++; continue; }
+    const imp = numEvos(r[c.imp]) || 0, seg = segundosEvos(r[c.dur]), pot = numEvos(r[c.pot]);
+    const anio = +f.dia.slice(0, 4), mes = +f.dia.slice(5, 7);
+    const serial = t(r, c.serial), acdc = t(r, c.acdc).toUpperCase(), dir = t(r, c.dir), cp = cpEvos(r[c.cp]);
+    const region = CCAA_CP[cp.slice(0, 2)] || t(r, c.reg);
+    const punto = [serial || '¿?', dir || '¿?', cp].join(' · ');
+    const clave = [anio, mes, punto, acdc, t(r, c.cpo), t(r, c.emp)].join('\u001f');
+    let a = agg.get(clave);
+    if (!a) agg.set(clave, a = { anio, mes, punto, serial, ac_dc: acdc, cpo: t(r, c.cpo), empresa: t(r, c.emp), region,
+      provincia: t(r, c.prov), ciudad: t(r, c.ciu), cp, direccion: dir, potencia: null, sesiones: 0, kwh: 0, importe: 0, segundos: 0, primera: f.ts, ultima: f.ts });
+    a.sesiones++; a.kwh += kwh; a.importe += imp; a.segundos += seg;
+    if (pot != null) a.potencia = Math.max(a.potencia ?? 0, pot);
+    if (f.ts < a.primera) a.primera = f.ts; if (f.ts > a.ultima) a.ultima = f.ts;
+    const cd = [f.dia, acdc, region].join('\u001f');
+    let d = dias.get(cd); if (!d) dias.set(cd, d = { dia: f.dia, ac_dc: acdc, region, sesiones: 0, kwh: 0, importe: 0 });
+    d.sesiones++; d.kwh += kwh; d.importe += imp;
+    n++; kwhT += kwh; impT += imp;
+  }
+  const redondea = (o) => { for (const k of ['kwh', 'importe']) o[k] = Math.round(o[k] * 10000) / 10000; return o; };
+  const listaDias = [...new Set([...dias.values()].map((d) => d.dia))].sort();
+  log(`✔ ${nombre}: ${fN(n)} sesiones · ${fN(kwhT)} kWh · del ${fFecha(listaDias[0])} al ${fFecha(listaDias.at(-1))}` +
+      (dup ? ` · ${dup} sesiones repetidas omitidas` : '') + (malas ? ` · ${malas} filas sin fecha o energía` : ''));
+  return { nombre, sesiones: n, kwh: kwhT, importe: impT, dias: listaDias, agg: [...agg.values()].map(redondea), porDia: [...dias.values()].map(redondea) };
+}

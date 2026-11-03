@@ -69,6 +69,7 @@ input[type=search] { min-width: 280px; }
 .grid { display: grid; gap: 16px; margin-top: 16px; }
 .g2 { grid-template-columns: 1fr 1fr; }
 .g2-1 { grid-template-columns: 1.6fr 1fr; }
+.g1-2 { grid-template-columns: 1fr 1.7fr; }
 .kpis { display: grid; grid-template-columns: 1.5fr repeat(4, 1fr); gap: 16px; }
 .lbl { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
 .tile { display: flex; flex-direction: column; gap: 4px; }
@@ -149,13 +150,13 @@ input[type=search] { min-width: 280px; }
 .kv span { color: var(--ink-2); }
 
 /* ---------- upload ---------- */
-#drop { border: 1.5px dashed var(--axis); border-radius: 10px; padding: 30px; text-align: center; color: var(--ink-2); transition: .15s; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-#drop svg { width: 30px; height: 30px; fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-#drop p { margin: 0; }
-#drop.on { border-color: var(--accent); background: var(--accent-soft); }
-#cola { list-style: none; padding: 0; margin: 12px 0 0; max-height: 180px; overflow: auto; font-size: 13px; }
-#cola li { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid #f0f1f4; }
-#cola li span { color: var(--mute); flex: none; }
+#drop, #evDrop { border: 1.5px dashed var(--axis); border-radius: 10px; padding: 30px; text-align: center; color: var(--ink-2); transition: .15s; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+#drop svg, #evDrop svg { width: 30px; height: 30px; fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+#drop p, #evDrop p { margin: 0; }
+#drop.on, #evDrop.on { border-color: var(--accent); background: var(--accent-soft); }
+#cola, #evCola { list-style: none; padding: 0; margin: 12px 0 0; max-height: 180px; overflow: auto; font-size: 13px; }
+#cola li, #evCola li { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid #f0f1f4; }
+#cola li span, #evCola li span { color: var(--mute); flex: none; }
 .res-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
 .res-kpis div { background: #f7f8fa; border-radius: 8px; padding: 10px; }
 .res-kpis b { display: block; font-size: 20px; }
@@ -177,7 +178,7 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 @media (max-width: 1200px) {
   .kpis { grid-template-columns: repeat(2, 1fr); }
   .kpis .hero { grid-column: 1 / -1; }
-  .g2, .g2-1 { grid-template-columns: 1fr; }
+  .g2, .g2-1, .g1-2 { grid-template-columns: 1fr; }
   .steps { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 760px) {
@@ -287,3 +288,10 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .tile .delta { font-size: 12px; }
 .delta .up { color: var(--good); } .delta .down { color: var(--bad); }
 .oAnio { width: 76px; margin-left: 6px; font: inherit; font-weight: 600; border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+
+/* ---------- evOS ---------- */
+#v-evos .grid { margin-top: 16px; }
+#evCola li.ok span { color: var(--ok, #1a7f4b); } #evCola li.err span { color: var(--danger); }
+.btn.sm { padding: 3px 9px; font-size: 12px; }
+#tbEvPts td:first-child { white-space: normal; min-width: 0; } #tbEvPts { table-layout: auto; width: 100%; } #tbEvPts td { vertical-align: top; }
+#tbEvPts td:nth-child(2) { white-space: nowrap; }
