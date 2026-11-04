@@ -923,9 +923,9 @@ let EVOS = null;
 const skCols = () => `<div class="sk-cols">${ALTOS.map((h) => `<span class="sk" style="height:${h}%"></span>`).join('')}</div>`;
 function skEvos(tab) {
   if (tab === 'general') {
-    for (const id of ['#gDif']) $(id).innerHTML = sk('140px', '44px');
-    for (const id of ['#gFact', '#gEvos', '#gCoste', '#gCups']) $(id).innerHTML = sk('100px', '26px');
-    for (const id of ['#gMeses', '#gCosteSub', '#gCupsSub']) $(id).innerHTML = sk('80%');
+    $('#gFact').innerHTML = sk('140px', '44px');
+    for (const id of ['#gEur', '#gBtMt', '#gSinCups']) $(id).innerHTML = sk('100px', '26px');
+    for (const id of ['#gMeses', '#gEurSub', '#gBtMtSub', '#gSinCupsSub']) $(id).innerHTML = sk('80%');
     $('#gDifPct').innerHTML = '';
     $('#chGen').innerHTML = skCols();
     $('#chGenPct').innerHTML = `<div class="sk-line"><span class="sk"></span><span class="sk onda"></span><span class="sk"></span><span class="sk"></span></div>`;
@@ -969,30 +969,33 @@ const conCruce = (d) => CRUCE && CRUCE.cruce && CRUCE.anio === d.anio;
 function mesesGenerales(d) {
   const c = conCruce(d) ? CRUCE : null;
   const n = (v) => (v == null ? null : +v);
-  return d.mensual.map((m, i) => {
+  const meses = d.mensual.map((m, i) => {
     const x = c ? c.mensual[i] : null;
     // total contra total: todo lo facturado frente a lo entregado en los puntos Public Infra (todo evOS si aún no hay maestro)
     const F = n(m.pro_kwh), E = c ? n(x.e_pi) : n(m.kwh);
-    const completo = m.dias >= m.dias_mes, comparable = completo && F > 0 && E > 0;
     // celeste: todo evOS con Type = PUBLIC (solo si los ficheros de ese mes ya traen el Type guardado)
     const P = c && +x.e_public ? +x.e_public : null;
-    return { ...m, x, label: MESES[m.mes - 1], F, E, P, a: F, b: E, c: P, completo, comparable, dif: comparable ? (F - E) / F * 100 : null,
-      cN: n(m.pro_neto) };
+    return { ...m, x, label: MESES[m.mes - 1], F, E, P, a: F, b: E, c: P, completo: m.dias >= m.dias_mes, cN: n(m.pro_neto) };
   });
+  // referencia de la comparación: evOS Public (celeste); si aún no hay Type guardado, nuestros puntos Public Infra
+  const usaP = meses.some((m) => m.P != null);
+  for (const m of meses) {
+    m.R = usaP ? m.P : m.E; m.refPublic = usaP;
+    m.comparable = m.completo && m.F > 0 && m.R > 0;
+    m.dif = m.comparable ? (m.F - m.R) / m.F * 100 : null;
+  }
+  return meses;
 }
 /** Qué parte de cada lado entra en la comparación (meses comparables). */
 function pintarCobertura(d, meses) {
   const c = conCruce(d) ? CRUCE : null;
   if (!c) {
-    $('#gCups').textContent = '—'; $('#gCupsSub').textContent = 'falta el maestro de puntos de recarga';
     $('#cobCruce').textContent = '';
     $('#lsCob').innerHTML = '<p class="muted">Falta el maestro de puntos de recarga: mientras tanto se compara todo evOS con todas las facturas.</p>';
     $('#tbCupsTop').innerHTML = '<tbody><tr><td class="muted">Falta el maestro de puntos de recarga con su CUPS.</td></tr></tbody>';
     return;
   }
   $('#cobCruce').textContent = `${fN(c.n.pi)} puntos Public Infra con sesiones en evOS`;
-  $('#gCups').textContent = fN(c.n.pi);
-  $('#gCupsSub').textContent = `con sesiones en evOS · de ${fN(c.cruce.puntos)} en el maestro`;
   const comp = meses.filter((m) => m.comparable);
   const S = (k) => comp.reduce((a, m) => a + (+m.x[k] || 0), 0);
   const Et = S('e_tot'), Ep = S('e_pi'), Es = S('e_pi_sin'), Er = S('e_rec');
@@ -1021,32 +1024,41 @@ function pintarGeneral(d) {
     $('#genVacioTxt').textContent = !hayE && !hayF ? `No hay facturas ni datos de evOS de ${d.anio}.` : !hayE ? `No hay datos de evOS de ${d.anio}: súbelos en «Cargar datos».` : `No hay facturas de ${d.anio}.`;
     return;
   }
-  const sum = (k) => comp.reduce((a, m) => a + (m[k] || 0), 0);
-  const F = sum('F'), E = sum('E'), N = sum('cN');
+  const sum = (k) => comp.reduce((a, m) => a + (+m[k] || 0), 0);
+  const sx = (k) => comp.reduce((a, m) => a + (+m.x?.[k] || 0), 0);
+  const F = sum('F'), Rf = sum('R'), N = sum('cN');
+  const refTxt = meses[0]?.refPublic ? 'evOS Public' : 'nuestros puntos en evOS';
+  const c = conCruce(d) ? CRUCE : null;
   if (comp.length) {
-    // siempre en positivo y con la etiqueta que toca: o sobra factura o sobra energía entregada
-    const mas = F >= E;
-    $('#gDifLbl').textContent = mas ? 'Facturado sin entregar' : 'Entregado sin facturar';
-    $('#gDif').textContent = fN(Math.abs(F - E) / 1000, 1);
-    $('#gFactSub').textContent = 'MWh · todas las facturas · meses comparables';
-    $('#gEvosSub').textContent = conCruce(d) ? 'MWh · puntos Public Infra · meses comparables' : 'MWh · todo evOS · meses comparables';
-    $('#gDifPct').innerHTML = mas ? `${fN((F - E) / F * 100, 1)} % de lo facturado` : `evOS entrega un ${fN((E - F) / F * 100, 1)} % más de lo facturado`;
+    const dev = (F - Rf) / F * 100;
+    $('#gFact').textContent = fN(F / 1000, 1);
+    $('#gDifPct').innerHTML = `<b>${dev > 0 ? '+' : ''}${fN(dev, 1)} %</b> frente a ${refTxt} (${fN(Rf / 1000, 1)} MWh)`;
     $('#gMeses').textContent = `${comp.length} ${comp.length === 1 ? 'mes comparable' : 'meses comparables'}: ${comp.map((m) => m.label).join(', ')}`;
-    $('#gFact').textContent = fN(F / 1000, 1); $('#gEvos').textContent = fN(E / 1000, 1);
-    $('#gCoste').textContent = fN(N / E, 3) + ' €'; $('#gCosteSub').textContent = `por kWh entregado · ${fN(N / F, 3)} € por kWh facturado`;
+    $('#gEur').textContent = fN(N, 0) + ' €';
+    $('#gEurSub').textContent = `sin IVA · ${fN(N / F, 3)} €/kWh facturado · ${fN(N / Rf, 3)} €/kWh entregado`;
+    if (c) {
+      const bt = sx('e_bt'), mt = sx('e_mt'), pi = sx('e_pi');
+      $('#gBtMt').textContent = `${fN(bt / 1000, 0)} · ${fN(mt / 1000, 0)}`;
+      $('#gBtMtSub').textContent = `MWh BT · MT en nuestros puntos · ${fN((pi - bt - mt) / 1000, 0)} MWh sin tensión (sin CUPS)`;
+    } else { $('#gBtMt').textContent = '—'; $('#gBtMtSub').textContent = 'falta el maestro de puntos de recarga'; }
   } else {
-    $('#gDif').textContent = '—'; $('#gDifPct').innerHTML = '';
+    $('#gDifPct').innerHTML = '';
     $('#gMeses').textContent = 'Aún no hay ningún mes con evOS completo y facturas';
-    for (const id of ['#gFact', '#gEvos', '#gCoste']) $(id).textContent = '—';
-    $('#gCosteSub').textContent = '';
+    for (const id of ['#gFact', '#gEur', '#gBtMt']) $(id).textContent = '—';
+    for (const id of ['#gEurSub', '#gBtMtSub']) $(id).textContent = '';
   }
+  if (c?.cruce) {
+    const k = c.cruce;
+    $('#gSinCups').textContent = fN(k.sin_cups);
+    $('#gSinCupsSub').textContent = `de ${fN(k.puntos)} · con CUPS: ${fN(k.bt)} BT · ${fN(k.mt)} MT` + (+k.sin_tension ? ` · ${fN(k.sin_tension)} sin facturas` : '');
+  } else { $('#gSinCups').textContent = '—'; $('#gSinCupsSub').textContent = 'falta el maestro de puntos de recarga'; }
   pintarCobertura(d, meses);
   const tip = (m) => tipRows(`${m.label} ${d.anio}`, [
     ['Facturado', m.F == null ? 'sin facturas' : fN(m.F) + ' kWh'],
-    ['Entregado (evOS)', m.E == null ? 'sin datos' : fN(m.E) + ' kWh'],
+    ['Nuestros puntos Public Infra', m.E == null ? 'sin datos' : fN(m.E) + ' kWh'],
     ...(m.P != null ? [['evOS Type Public', fN(m.P) + ' kWh']] : m.x && +m.x.e_sin_tipo ? [['evOS Type Public', 'vuelve a subir evOS de este mes']] : []),
     ['Días con evOS', `${m.dias} de ${m.dias_mes}`],
-    ['Diferencia', m.comparable ? `${fN(m.F - m.E)} kWh · ${fN(m.dif, 1)} %` : m.F && m.E ? 'mes incompleto en evOS' : '—'],
+    [m.refPublic ? 'Diferencia con evOS Public' : 'Diferencia', m.comparable ? `${fN(m.F - m.R)} kWh · ${fN(m.dif, 1)} %` : m.F && m.R ? 'mes incompleto en evOS' : '—'],
   ]);
   const irMes = (m) => { if (conCruce(d) && (m.F || m.E)) irACruce(m.mes); };
   $('#lgPublic').classList.toggle('hide', !meses.some((m) => m.P != null));

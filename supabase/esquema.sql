@@ -1183,8 +1183,11 @@ returns jsonb language sql stable security definer set search_path = public as $
                 sum(ev.kwh) filter (where ev.metodo is not null) e_pi,                         -- puntos del maestro (Public Infra)
                 sum(ev.kwh) filter (where ev.metodo is not null and ev.cups20 is null) e_pi_sin,
                 sum(ev.kwh) filter (where ev.tipo = 'PUBLIC') e_public,              -- evOS con Type = PUBLIC
-                sum(ev.kwh) filter (where ev.tipo is null) e_sin_tipo                -- ficheros subidos antes de guardar el Type
-         from ev left join per using (cups20) left join fcups fc using (cups20) group by 1),
+                sum(ev.kwh) filter (where ev.tipo is null) e_sin_tipo,               -- ficheros subidos antes de guardar el Type
+                sum(ev.kwh) filter (where ev.metodo is not null and cu.tension = 'BT') e_bt,   -- nuestros puntos, por la tensión de su CUPS
+                sum(ev.kwh) filter (where ev.metodo is not null and cu.tension = 'MT') e_mt
+         from ev left join per using (cups20) left join fcups fc using (cups20)
+         left join public.cups cu on cu.cups20 = ev.cups20 group by 1),
   sel as (select mes from comp where p_mes is null union select p_mes where p_mes is not null),
   fc_c as (select cups20, sum(kwh) f_kwh, sum(neto) f_neto from fa where mes in (select mes from sel) group by 1),
   ev_c as (select cups20, sum(kwh) e_kwh, sum(sesiones) e_ses from ev where mes in (select mes from sel) and cups20 is not null group by 1),
@@ -1195,8 +1198,11 @@ returns jsonb language sql stable security definer set search_path = public as $
               left join pts t using (cups20) left join dirs d using (cups20))
   select jsonb_build_object(
     'anio', p_anio,
-    'cruce', (select case when count(*) > 0 then jsonb_build_object('puntos', count(*), 'con_cups', count(public._cups20(cups))) end
-              from public.puntos_recarga),
+    'cruce', (select case when count(*) > 0 then jsonb_build_object('puntos', count(*), 'con_cups', count(public._cups20(pr.cups)),
+                'sin_cups', count(*) filter (where public._cups20(pr.cups) is null),
+                'bt', count(*) filter (where cu.tension = 'BT'), 'mt', count(*) filter (where cu.tension = 'MT'),
+                'sin_tension', count(*) filter (where public._cups20(pr.cups) is not null and cu.tension is null)) end
+              from public.puntos_recarga pr left join public.cups cu on cu.cups20 = public._cups20(pr.cups)),
     'comparables', (select coalesce(jsonb_agg(mes order by mes), '[]') from comp),
     'mes', p_mes,
     'dias_mes', (select dias from dias where mes = p_mes),
@@ -1204,7 +1210,8 @@ returns jsonb language sql stable security definer set search_path = public as $
                                                     'e_per', em.e_per, 'e_imp_per', em.e_imp_per, 'e_tot', em.e_tot,
                                                     'e_sin', em.e_sin, 'e_nofact', em.e_nofact, 'e_rec', em.e_rec,
                                                     'e_pi', em.e_pi, 'e_pi_sin', em.e_pi_sin,
-                                                    'e_public', em.e_public, 'e_sin_tipo', em.e_sin_tipo) order by g.mes)
+                                                    'e_public', em.e_public, 'e_sin_tipo', em.e_sin_tipo,
+                                                    'e_bt', em.e_bt, 'e_mt', em.e_mt) order by g.mes)
                 from generate_series(1, 12) g(mes) left join fm on fm.mes = g.mes left join em on em.mes = g.mes),
     'n', jsonb_build_object('pi', (select count(distinct coalesce(serial_cruce, punto)) from public.evos_cups), 'per', (select count(*) from per), 'fcups', (select count(*) from fcups), 'ecups', (select count(*) from ecups)),
     'cups', (select coalesce(jsonb_agg(jsonb_build_object(

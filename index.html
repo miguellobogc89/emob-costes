@@ -82,17 +82,16 @@
           <a class="btn pri" href="#cargar">Cargar datos</a>
         </div>
         <div id="genPanel">
-          <div class="kpis">
+          <div class="kpis k4">
             <div class="card hero">
-              <span class="lbl"><span id="gDifLbl">Facturado sin entregar</span><button class="info" type="button" aria-label="Qué significa" data-info="kWh que Endesa nos factura y que no llegan a ningún coche según evOS (pérdidas, consumo propio de los equipos, lecturas estimadas, errores de facturación…). Solo meses comparables: los que evOS cubre entero y tienen facturas.">i</button></span>
-              <div class="hero-val"><span id="gDif">—</span><small>MWh</small></div>
+              <span class="lbl">Consumo facturado<button class="info" type="button" aria-label="Qué significa" data-info="kWh facturados (BT + MT), repartidos entre los días de su periodo para que cada mes encaje con evOS, con las correcciones aplicadas. Debajo, la desviación frente a todo lo entregado según evOS con Type = PUBLIC (barra celeste). Solo meses comparables: los que evOS cubre entero y tienen facturas.">i</button></span>
+              <div class="hero-val"><span id="gFact">—</span><small>MWh</small></div>
               <span class="delta" id="gDifPct"></span>
               <span class="muted sm" id="gMeses"></span>
             </div>
-            <div class="card tile"><span class="lbl">Facturado<button class="info" type="button" aria-label="Qué significa" data-info="kWh facturados (BT + MT), repartidos entre los días de su periodo para que cada mes encaje con evOS, con las correcciones aplicadas. Son todas las facturas subidas.">i</button></span><b id="gFact">—</b><span class="muted sm" id="gFactSub">MWh · meses comparables</span></div>
-            <div class="card tile"><span class="lbl">Entregado según evOS<button class="info" type="button" aria-label="Qué significa" data-info="Energía de las sesiones de evOS en los mismos meses, solo de los puntos Public Infra (los del maestro de puntos de recarga), tengan CUPS o no.">i</button></span><b id="gEvos">—</b><span class="muted sm" id="gEvosSub">MWh · meses comparables</span></div>
-            <div class="card tile"><span class="lbl">Coste por kWh entregado<button class="info" type="button" aria-label="Qué significa" data-info="Importe facturado sin IVA dividido entre los kWh entregados según evOS: lo que de verdad cuesta cada kWh que llega a un coche. Debajo, el coste por kWh facturado, para comparar.">i</button></span><b id="gCoste">—</b><span class="muted sm" id="gCosteSub"></span></div>
-            <div class="card tile"><span class="lbl">Puntos Public Infra<button class="info" type="button" aria-label="Qué significa" data-info="Puntos del maestro de puntos de recarga (Public Infra) que tienen sesiones en evOS este año. Son los que suman en la barra naranja.">i</button></span><b id="gCups">—</b><span class="muted sm" id="gCupsSub"></span></div>
+            <div class="card tile"><span class="lbl">Importe facturado<button class="info" type="button" aria-label="Qué significa" data-info="Importe facturado sin IVA en los mismos meses (BT + MT), repartido por días igual que los kWh. Debajo, lo que cuesta cada kWh facturado y cada kWh entregado según evOS Public.">i</button></span><b id="gEur">—</b><span class="muted sm" id="gEurSub"></span></div>
+            <div class="card tile"><span class="lbl">Entregado BT / MT<button class="info" type="button" aria-label="Qué significa" data-info="Energía entregada según evOS en nuestros puntos Public Infra en los mismos meses, separada por la tensión de su CUPS (6.x = media tensión). Los puntos sin CUPS no se pueden asignar a una tensión.">i</button></span><b id="gBtMt">—</b><span class="muted sm" id="gBtMtSub"></span></div>
+            <div class="card tile"><span class="lbl">Puntos sin CUPS<button class="info" type="button" aria-label="Qué significa" data-info="Puntos Public Infra del maestro sin CUPS informado: su consumo cuenta en evOS pero no se puede emparejar con su factura ni saber su tensión. Debajo, los que sí tienen CUPS, por tensión.">i</button></span><b id="gSinCups">—</b><span class="muted sm" id="gSinCupsSub"></span></div>
           </div>
           <div class="grid g2-1">
             <div class="card">
@@ -101,7 +100,7 @@
               <div class="chart" id="chGen"></div>
             </div>
             <div class="card">
-              <div class="card-h"><h3>Diferencia por mes<button class="info" type="button" aria-label="Qué significa" data-info="(Facturado − entregado) ÷ facturado. Positivo: se factura energía que no llega a los coches. Negativo: evOS entrega más de lo facturado (faltan facturas o evOS incluye puntos que no factura Endesa). Solo meses comparables.">i</button></h3><span class="muted sm">% de lo facturado</span></div>
+              <div class="card-h"><h3>Diferencia por mes<button class="info" type="button" aria-label="Qué significa" data-info="(Facturado − entregado en evOS Public) ÷ facturado, contra la barra celeste. Positivo: se factura energía que no llega a los coches. Negativo: evOS entrega más de lo facturado (probablemente faltan facturas). Solo meses comparables.">i</button></h3><span class="muted sm">% de lo facturado</span></div>
               <div class="chart" id="chGenPct"></div>
             </div>
           </div>
