@@ -1232,6 +1232,38 @@ returns jsonb language sql stable security definer set search_path = public as $
       ) order by coalesce(c.f_kwh, 0) - coalesce(c.e_kwh, 0) desc), '[]') from porcups c)
   );
 $$;
+-- CUPS sospechosos: CUPS de puntos NNSS que facturan mucho más de lo que entregan sus puntos (meses comparables)
+create or replace function public.cups_sospechosos(p_anio int)
+returns jsonb language sql stable security definer set search_path = public as $$
+  with dias as (select extract(month from dia)::int mes, count(distinct dia) d from public.evos_dia
+                where dia >= make_date(p_anio, 1, 1) and dia < make_date(p_anio + 1, 1, 1) group by 1),
+  comp as (select mes, d from dias where d >= extract(day from (make_date(p_anio, mes, 1) + interval '1 month' - interval '1 day'))),
+  horas as (select coalesce(sum(d), 0) * 24 h from comp),
+  nn as (select numero_serie, public._cups20(cups) c20, nombre_cuenta, direccion from public.puntos_recarga
+         where lower(btrim(business_model)) = 'public infra' and upper(btrim(tipologia)) = 'NNSS' and public._cups20(cups) is not null),
+  ev as (select n.c20, sum(a.kwh)::float8 kwh, count(distinct n.numero_serie) puntos
+         from public.evos_agg a join public.evos_cups e on e.punto = a.punto join nn n on n.numero_serie = e.serial_cruce
+         where a.anio = p_anio and a.mes in (select mes from comp) group by 1),
+  pot as (select n.c20, sum(p.kw)::float8 kw from (select e.serial_cruce sn, max(a.potencia) kw from public.evos_agg a
+          join public.evos_cups e on e.punto = a.punto group by 1) p join nn n on n.numero_serie = p.sn group by 1),
+  fa as (select cups20 c20, sum(kwh)::float8 kwh, sum(neto)::float8 neto from public.cache_prorr_cups
+         where anio = p_anio and mes in (select mes from comp) group by 1),
+  pts as (select c20, count(*) puntos, max(nombre_cuenta) cuenta, max(direccion) direccion from nn group by 1),
+  t as (
+    select f.c20, p.cuenta, p.direccion, p.puntos, coalesce(ev.puntos, 0) puntos_ses, f.kwh f_kwh, coalesce(ev.kwh, 0) e_kwh, f.neto,
+           pot.kw, pot.kw is not null and f.kwh > pot.kw * (select h from horas) imposible,
+           greatest(f.kwh - coalesce(ev.kwh, 0) * 1.15, 0) * f.neto / nullif(f.kwh, 0) eur
+    from fa f join pts p on p.c20 = f.c20 left join ev on ev.c20 = f.c20 left join pot on pot.c20 = f.c20
+    where f.kwh > 1000 and f.kwh > 1.5 * coalesce(ev.kwh, 0))
+  select jsonb_build_object(
+    'meses', (select coalesce(jsonb_agg(mes order by mes), '[]') from comp),
+    'cups', (select coalesce(jsonb_agg(jsonb_build_object(
+        'cups20', c20, 'cuenta', cuenta, 'direccion', direccion, 'puntos', puntos, 'puntos_ses', puntos_ses,
+        'f_kwh', round(f_kwh::numeric), 'e_kwh', round(e_kwh::numeric), 'neto', round(neto::numeric, 2),
+        'kw', round(kw::numeric), 'imposible', imposible, 'eur', round(eur::numeric, 2)) order by eur desc nulls last), '[]') from t));
+$$;
+grant execute on function public.cups_sospechosos(int) to authenticated;
+revoke execute on function public.cups_sospechosos(int) from anon, public;
 -- Detalle de un CUPS en un mes: sus facturas (con la parte que cae en el mes) y sus puntos de evOS
 create or replace function public.cruce_detalle(p_anio int, p_mes int, p_cups20 text)
 returns jsonb language sql stable security definer set search_path = public as $$

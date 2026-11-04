@@ -953,11 +953,40 @@ async function cargarEvosInicio() {
   if (!CRUCE || CRUCE.anio !== anio) { const gc = LS.get('cruce.' + anio); if (gc) CRUCE = gc; }
   if (g && g.diario) pintarEvosInicio(g); else skEvos(tab);
   const fresco = CRUCE; CRUCE = null;
+  if (tab === 'general') cargarSospechosos(anio);
   const [d] = await Promise.all([seguro(() => SB.rpc('evos_dashboard', { p_anio: anio })), tab === 'general' ? seguro(datosCruce) : null]);
   if (!CRUCE) CRUCE = fresco;
   if (!d) return;
   LS.set(clave, d);
   if ((ST.anio ?? new Date().getFullYear()) === anio) pintarEvosInicio(d);
+}
+// --- CUPS sospechosos: facturan mucho más de lo que entregan sus puntos NNSS
+let SOSP = null;
+async function cargarSospechosos(anio) {
+  const c = LS.get('sosp.' + anio);
+  if (c) { SOSP = { anio, ...c }; pintarSospechosos(); } else $('#tbSosp').innerHTML = `<tbody>${Array.from({ length: 4 }, () => `<tr><td>${sk('90%')}</td></tr>`).join('')}</tbody>`;
+  const d = await seguro(() => SB.rpc('cups_sospechosos', { p_anio: anio }));
+  if (!d) return;
+  LS.set('sosp.' + anio, d); SOSP = { anio, ...d };
+  if ((ST.anio ?? new Date().getFullYear()) === anio) pintarSospechosos();
+}
+function pintarSospechosos() {
+  if (!SOSP || ST.vista !== 'inicio' || ST.itab !== 'general') return;
+  const l = SOSP.cups || [];
+  const tot = l.reduce((a, x) => a + (+x.eur || 0), 0), imp = l.filter((x) => x.imposible).length;
+  $('#sospRes').textContent = !SOSP.meses?.length ? 'aún no hay meses comparables' :
+    `${fN(l.length)} CUPS · ${fEur(tot)} en juego${imp ? ` · ${imp} ${imp === 1 ? 'imposible' : 'imposibles'}` : ''} · ${SOSP.meses.map((m) => MESES[m - 1]).join(', ')}`;
+  if (!l.length) { $('#tbSosp').innerHTML = '<tbody><tr><td class="muted">Ningún CUPS NNSS factura más de 1,5 veces lo que entregan sus puntos.</td></tr></tbody>'; return; }
+  $('#tbSosp').innerHTML = `<thead><tr><th>CUPS · cuenta · dirección</th><th class="num">Puntos</th><th class="num">Potencia</th><th class="num">Facturado</th><th class="num">Entregado</th><th class="num">Veces</th><th class="num">Facturado €</th><th class="num">En juego</th></tr></thead><tbody>` +
+    l.map((x) => {
+      const veces = +x.e_kwh ? x.f_kwh / x.e_kwh : null;
+      return `<tr class="clic" data-cups="${esc(x.cups20)}"><td class="wrap"><span class="cups">${esc(x.cups20)}</span>${x.imposible ? ' <span class="tag C">imposible</span>' : ''}<br>${esc(x.cuenta || '')}<br><span class="muted sm">${esc(x.direccion || '')}</span></td>
+        <td class="num">${fN(x.puntos_ses)} / ${fN(x.puntos)}</td><td class="num">${x.kw == null ? '—' : fN(x.kw) + ' kW'}</td>
+        <td class="num">${fN(x.f_kwh)} kWh</td><td class="num">${fN(x.e_kwh)} kWh</td>
+        <td class="num"><span class="desv alta">${veces == null ? 'sin entregas' : '×' + fN(veces, 1)}</span></td>
+        <td class="num">${fEur(x.neto)}</td><td class="num"><b>${fEur(x.eur)}</b></td></tr>`;
+    }).join('') + '</tbody>';
+  $$('#tbSosp tr.clic').forEach((tr) => tr.onclick = () => abrirDetalle(tr.dataset.cups, null));
 }
 function pintarEvosInicio(d) {
   EVOS = d;
@@ -1053,6 +1082,7 @@ function pintarGeneral(d) {
     $('#gSinCupsSub').textContent = `de ${fN(k.nnss)} puntos NNSS · con CUPS: ${fN(k.bt)} BT · ${fN(k.mt)} MT` + (+k.sin_tension ? ` · ${fN(k.sin_tension)} sin facturas` : '');
   } else { $('#gSinCups').textContent = '—'; $('#gSinCupsSub').textContent = 'falta el maestro de puntos de recarga'; }
   pintarCobertura(d, meses);
+  pintarSospechosos();
   const tip = (m) => tipRows(`${m.label} ${d.anio}`, [
     ['Facturado', m.F == null ? 'sin facturas' : fN(m.F) + ' kWh'],
     ['Nuestros puntos NNSS', m.E == null ? 'sin datos' : fN(m.E) + ' kWh'],
