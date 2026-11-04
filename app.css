@@ -337,3 +337,10 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 .drawer-panel .tbl tr.muted td { color: var(--mute); }
 #dwMes { font: inherit; font-size: 13px; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line); background: #fff; }
 .avisos a { color: inherit; }
+
+/* Visión general: facturado en rojo suave, nuestros puntos Public Infra en azul Salesforce, evOS Type Public en celeste */
+:root { --gen-fact: #e8837c; --gen-pi: #0176d3; }
+#chGen .bar { fill: var(--gen-fact); }
+#chGen .bar2 { fill: var(--gen-pi); }
+#chGen .ghost { fill: var(--gen-fact); }
+.leyenda.gen .sw1 { background: var(--gen-fact); } .leyenda.gen .sw2 { background: var(--gen-pi); }
