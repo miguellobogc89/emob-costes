@@ -345,3 +345,6 @@ pre { background: #0f1720; color: #d6e2ef; border-radius: 8px; padding: 12px; fo
 #chGen .bar2 { fill: var(--gen-pi); }
 #chGen .ghost { fill: var(--gen-fact); }
 .leyenda.gen .sw1 { background: var(--gen-fact); } .leyenda.gen .sw2 { background: var(--gen-pi); }
+
+.leyenda [data-info] { cursor: help; }
+.leyenda [data-info]:hover { color: var(--ink); text-decoration: underline dotted; text-underline-offset: 3px; }

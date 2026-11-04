@@ -78,16 +78,16 @@ function showTip(e, html) {
 }
 const hideTip = () => tip.classList.remove('ayuda') || tip.classList.add('hide');
 // iconos de ayuda: pasar el ratón, enfocar con teclado o tocar
-document.addEventListener('mouseover', (e) => { const b = e.target.closest('.info'); if (b) { showTip(e, esc(b.dataset.info)); tip.classList.add('ayuda'); } });
-document.addEventListener('mouseout', (e) => { if (e.target.closest('.info')) hideTip(); });
+document.addEventListener('mouseover', (e) => { const b = e.target.closest('.info, .leyenda [data-info]'); if (b) { showTip(e, esc(b.dataset.info)); tip.classList.add('ayuda'); } });
+document.addEventListener('mouseout', (e) => { if (e.target.closest('.info, .leyenda [data-info]')) hideTip(); });
 document.addEventListener('click', (e) => {
-  const b = e.target.closest('.info');
+  const b = e.target.closest('.info, .leyenda [data-info]');
   if (!b) { if (tip.classList.contains('ayuda')) hideTip(); return; }
   e.preventDefault(); e.stopPropagation();
   const r = b.getBoundingClientRect(); showTip({ clientX: r.right, clientY: r.top }, esc(b.dataset.info)); tip.classList.add('ayuda');
 });
-document.addEventListener('focusin', (e) => { const b = e.target.closest?.('.info'); if (b) { const r = b.getBoundingClientRect(); showTip({ clientX: r.right, clientY: r.top }, esc(b.dataset.info)); tip.classList.add('ayuda'); } });
-document.addEventListener('focusout', (e) => { if (e.target.closest?.('.info')) hideTip(); });
+document.addEventListener('focusin', (e) => { const b = e.target.closest?.('.info, .leyenda [data-info]'); if (b) { const r = b.getBoundingClientRect(); showTip({ clientX: r.right, clientY: r.top }, esc(b.dataset.info)); tip.classList.add('ayuda'); } });
+document.addEventListener('focusout', (e) => { if (e.target.closest?.('.info, .leyenda [data-info]')) hideTip(); });
 const tipRows = (title, rows) => `<b>${esc(title)}</b>` + rows.map(([k, v]) => `<div class="r"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join('');
 
 // ---------------------------------------------------------------- gráficos SVG
@@ -972,15 +972,14 @@ function mesesGenerales(d) {
   const meses = d.mensual.map((m, i) => {
     const x = c ? c.mensual[i] : null;
     // total contra total: todo lo facturado frente a lo entregado en los puntos Public Infra (todo evOS si aún no hay maestro)
-    const F = n(m.pro_kwh), E = c ? n(x.e_pi) : n(m.kwh);
+    const F = n(m.pro_kwh), E = c ? n(x.e_nn) : n(m.kwh);   // azul oscura: puntos Public Infra + NNSS (suministro nuestro)
     // celeste: todo evOS con Type = PUBLIC (solo si los ficheros de ese mes ya traen el Type guardado)
     const P = c && +x.e_public ? +x.e_public : null;
     return { ...m, x, label: MESES[m.mes - 1], F, E, P, a: F, b: E, c: P, completo: m.dias >= m.dias_mes, cN: n(m.pro_neto) };
   });
-  // referencia de la comparación: evOS Public (celeste); si aún no hay Type guardado, nuestros puntos Public Infra
-  const usaP = meses.some((m) => m.P != null);
+  // referencia de la comparación: nuestros puntos NNSS (azul oscura); la celeste es solo referencia visual
   for (const m of meses) {
-    m.R = usaP ? m.P : m.E; m.refPublic = usaP;
+    m.R = m.E;
     m.comparable = m.completo && m.F > 0 && m.R > 0;
     m.dif = m.comparable ? (m.F - m.R) / m.F * 100 : null;
   }
@@ -998,14 +997,15 @@ function pintarCobertura(d, meses) {
   $('#cobCruce').textContent = `${fN(c.n.pi)} puntos Public Infra con sesiones en evOS`;
   const comp = meses.filter((m) => m.comparable);
   const S = (k) => comp.reduce((a, m) => a + (+m.x[k] || 0), 0);
-  const Et = S('e_tot'), Ep = S('e_pi'), Es = S('e_pi_sin'), Er = S('e_rec');
+  const Et = S('e_tot'), Ep = S('e_pi'), En = S('e_nn'), Es = S('e_nn_sin');
   const Ft = comp.reduce((a, m) => a + (+m.F || 0), 0), Fm = comp.reduce((a, m) => a + (+m.pro_kwh_mt || 0), 0);
   const fila = (t, v, tot, cls = '', sub = '') => `<div class="cob ${cls}"><span class="n">${t}${sub ? `<small>${sub}</small>` : ''}</span><span class="t"><span class="f" style="width:${tot ? Math.max(0, Math.min(100, v / tot * 100)) : 0}%"></span></span><span class="v">${fN(tot ? v / tot * 100 : 0, 0)} %<small>${fN(v / 1000, 0)} MWh</small></span></div>`;
   $('#lsCob').innerHTML = !comp.length ? '<p class="muted">Aún no hay meses comparables.</p>' :
     `<h4 class="mini-h">Energía entregada (evOS)</h4>` +
-    fila('Public Infra con CUPS', Ep - Es, Et, '', Er ? `incluye ${fN(Er / 1000, 0)} MWh por nº de serie recuperado` : '') +
-    fila('Public Infra sin CUPS', Es, Et, '', 'cuenta en el total aunque no se pueda emparejar con su factura') +
-    fila('Fuera del maestro', Et - Ep, Et, 'fuera', 'no es Public Infra o su nº de serie llega incompleto') +
+    fila('NNSS con CUPS', En - Es, Et, '', 'suministro nuestro: entra en la comparación') +
+    fila('NNSS sin CUPS', Es, Et, '', 'entra en el total aunque no se pueda emparejar con su factura') +
+    fila('Public Infra no NNSS', Ep - En, Et, 'fuera', 'CPO, O&M, Turnkey…: el suministro no es nuestro') +
+    fila('Fuera del maestro', Et - Ep, Et, 'fuera', 'no está en el maestro o su nº de serie llega incompleto') +
     `<h4 class="mini-h">Energía facturada</h4>` +
     fila('Baja tensión (BT)', Ft - Fm, Ft) +
     fila('Media tensión (MT)', Fm, Ft, '', Fm ? '' : 'aún no hay facturas de MT');
@@ -1027,7 +1027,7 @@ function pintarGeneral(d) {
   const sum = (k) => comp.reduce((a, m) => a + (+m[k] || 0), 0);
   const sx = (k) => comp.reduce((a, m) => a + (+m.x?.[k] || 0), 0);
   const F = sum('F'), Rf = sum('R'), N = sum('cN');
-  const refTxt = meses[0]?.refPublic ? 'evOS Public' : 'nuestros puntos en evOS';
+  const refTxt = 'nuestros puntos NNSS';
   const c = conCruce(d) ? CRUCE : null;
   if (comp.length) {
     const dev = (F - Rf) / F * 100;
@@ -1037,9 +1037,9 @@ function pintarGeneral(d) {
     $('#gEur').textContent = fN(N, 0) + ' €';
     $('#gEurSub').textContent = `sin IVA · ${fN(N / F, 3)} €/kWh facturado · ${fN(N / Rf, 3)} €/kWh entregado`;
     if (c) {
-      const bt = sx('e_bt'), mt = sx('e_mt'), pi = sx('e_pi');
+      const bt = sx('e_bt'), mt = sx('e_mt'), pi = sx('e_nn');
       $('#gBtMt').textContent = `${fN(bt / 1000, 0)} · ${fN(mt / 1000, 0)}`;
-      $('#gBtMtSub').textContent = `MWh BT · MT en nuestros puntos · ${fN((pi - bt - mt) / 1000, 0)} MWh sin tensión (sin CUPS)`;
+      $('#gBtMtSub').textContent = `MWh BT · MT en nuestros puntos NNSS · ${fN((pi - bt - mt) / 1000, 0)} MWh sin tensión (sin CUPS)`;
     } else { $('#gBtMt').textContent = '—'; $('#gBtMtSub').textContent = 'falta el maestro de puntos de recarga'; }
   } else {
     $('#gDifPct').innerHTML = '';
@@ -1049,16 +1049,16 @@ function pintarGeneral(d) {
   }
   if (c?.cruce) {
     const k = c.cruce;
-    $('#gSinCups').textContent = fN(k.sin_cups);
-    $('#gSinCupsSub').textContent = `de ${fN(k.puntos)} · con CUPS: ${fN(k.bt)} BT · ${fN(k.mt)} MT` + (+k.sin_tension ? ` · ${fN(k.sin_tension)} sin facturas` : '');
+    $('#gSinCups').textContent = fN(k.nnss_sin_cups);
+    $('#gSinCupsSub').textContent = `de ${fN(k.nnss)} puntos NNSS · con CUPS: ${fN(k.bt)} BT · ${fN(k.mt)} MT` + (+k.sin_tension ? ` · ${fN(k.sin_tension)} sin facturas` : '');
   } else { $('#gSinCups').textContent = '—'; $('#gSinCupsSub').textContent = 'falta el maestro de puntos de recarga'; }
   pintarCobertura(d, meses);
   const tip = (m) => tipRows(`${m.label} ${d.anio}`, [
     ['Facturado', m.F == null ? 'sin facturas' : fN(m.F) + ' kWh'],
-    ['Nuestros puntos Public Infra', m.E == null ? 'sin datos' : fN(m.E) + ' kWh'],
+    ['Nuestros puntos NNSS', m.E == null ? 'sin datos' : fN(m.E) + ' kWh'],
     ...(m.P != null ? [['evOS Type Public', fN(m.P) + ' kWh']] : m.x && +m.x.e_sin_tipo ? [['evOS Type Public', 'vuelve a subir evOS de este mes']] : []),
     ['Días con evOS', `${m.dias} de ${m.dias_mes}`],
-    [m.refPublic ? 'Diferencia con evOS Public' : 'Diferencia', m.comparable ? `${fN(m.F - m.R)} kWh · ${fN(m.dif, 1)} %` : m.F && m.R ? 'mes incompleto en evOS' : '—'],
+    ['Diferencia con NNSS', m.comparable ? `${fN(m.F - m.R)} kWh · ${fN(m.dif, 1)} %` : m.F && m.R ? 'mes incompleto en evOS' : '—'],
   ]);
   const irMes = (m) => { if (conCruce(d) && (m.F || m.E)) irACruce(m.mes); };
   $('#lgPublic').classList.toggle('hide', !meses.some((m) => m.P != null));
