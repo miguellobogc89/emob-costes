@@ -936,6 +936,7 @@ create table if not exists public.evos_agg (
   potencia  numeric, sesiones int, kwh numeric, importe numeric, segundos bigint,
   primera   timestamp, ultima timestamp
 );
+alter table public.evos_agg add column if not exists tipo text;   -- «Type» de evOS (PUBLIC…); null en ficheros subidos antes de guardarlo
 create index if not exists evos_agg_lote_idx on public.evos_agg (lote_id);
 create index if not exists evos_agg_mes_idx  on public.evos_agg (anio, mes);
 create table if not exists public.evos_dia (
@@ -1055,6 +1056,7 @@ returns jsonb language sql stable as $$
     where a.anio = p_anio group by coalesce(e.serial_cruce, a.punto)) p;
 $$;
 -- evos_agg con el nº de serie corregido (para la tabla evOS)
+drop view if exists public.evos_agg_v;   -- se recrea: evos_agg puede ganar columnas
 create or replace view public.evos_agg_v with (security_invoker = true) as
   select a.*, coalesce(e.serial_cruce, a.serial) serial_ok from public.evos_agg a left join public.evos_cups e on e.punto = a.punto;
 grant select on public.evos_agg_v to authenticated;
@@ -1159,9 +1161,9 @@ drop function if exists public.cruce_resumen(int);
 create or replace function public.cruce_resumen(p_anio int, p_mes int default null)
 returns jsonb language sql stable security definer set search_path = public as $$
   with ev as (   -- evOS por mes y CUPS (null = sin CUPS)
-    select a.mes, e.cups20, e.metodo, sum(a.kwh)::float8 kwh, sum(a.importe)::float8 importe, sum(a.sesiones) sesiones
+    select a.mes, e.cups20, e.metodo, upper(a.tipo) tipo, sum(a.kwh)::float8 kwh, sum(a.importe)::float8 importe, sum(a.sesiones) sesiones
     from public.evos_agg a left join public.evos_cups e on e.punto = a.punto
-    where a.anio = p_anio group by 1, 2, 3),
+    where a.anio = p_anio group by 1, 2, 3, 4),
   fa as (select mes, cups20, kwh, neto from public.cache_prorr_cups where anio = p_anio),
   fcups as (select cups20 from fa group by 1 having sum(abs(kwh)) > 0),
   ecups as (select distinct cups20 from ev where cups20 is not null),
@@ -1179,7 +1181,9 @@ returns jsonb language sql stable security definer set search_path = public as $
                 sum(ev.kwh) filter (where ev.cups20 is not null and fc.cups20 is null) e_nofact,
                 sum(ev.kwh) filter (where ev.metodo = 'recuperado' and per.cups20 is not null) e_rec,
                 sum(ev.kwh) filter (where ev.metodo is not null) e_pi,                         -- puntos del maestro (Public Infra)
-                sum(ev.kwh) filter (where ev.metodo is not null and ev.cups20 is null) e_pi_sin
+                sum(ev.kwh) filter (where ev.metodo is not null and ev.cups20 is null) e_pi_sin,
+                sum(ev.kwh) filter (where ev.tipo = 'PUBLIC') e_public,              -- evOS con Type = PUBLIC
+                sum(ev.kwh) filter (where ev.tipo is null) e_sin_tipo                -- ficheros subidos antes de guardar el Type
          from ev left join per using (cups20) left join fcups fc using (cups20) group by 1),
   sel as (select mes from comp where p_mes is null union select p_mes where p_mes is not null),
   fc_c as (select cups20, sum(kwh) f_kwh, sum(neto) f_neto from fa where mes in (select mes from sel) group by 1),
@@ -1199,7 +1203,8 @@ returns jsonb language sql stable security definer set search_path = public as $
     'mensual', (select jsonb_agg(jsonb_build_object('mes', g.mes, 'f_per', fm.f_per, 'f_neto_per', fm.f_neto_per, 'f_tot', fm.f_tot,
                                                     'e_per', em.e_per, 'e_imp_per', em.e_imp_per, 'e_tot', em.e_tot,
                                                     'e_sin', em.e_sin, 'e_nofact', em.e_nofact, 'e_rec', em.e_rec,
-                                                    'e_pi', em.e_pi, 'e_pi_sin', em.e_pi_sin) order by g.mes)
+                                                    'e_pi', em.e_pi, 'e_pi_sin', em.e_pi_sin,
+                                                    'e_public', em.e_public, 'e_sin_tipo', em.e_sin_tipo) order by g.mes)
                 from generate_series(1, 12) g(mes) left join fm on fm.mes = g.mes left join em on em.mes = g.mes),
     'n', jsonb_build_object('pi', (select count(distinct coalesce(serial_cruce, punto)) from public.evos_cups), 'per', (select count(*) from per), 'fcups', (select count(*) from fcups), 'ecups', (select count(*) from ecups)),
     'cups', (select coalesce(jsonb_agg(jsonb_build_object(

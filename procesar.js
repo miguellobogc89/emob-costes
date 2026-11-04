@@ -319,7 +319,7 @@ async function leerEvos(nombre, datos, log) {
     id: col('Session ID'), ini: col('Session start', 'Charging Start'), kwh: col('Energy consumption'),
     serial: col('Serial number'), acdc: col('Type of recharge(AC/DC)', 'Type of recharge'), cpo: col('CPO'), emp: col('Company code'),
     reg: col('Region'), prov: col('Province'), ciu: col('City'), cp: col('Postal Code'), dir: col('Address'),
-    pot: col('Nominal Power', 'Max station power'), imp: col('Total Amount CPO'), dur: col('Session duration'), st: col('Status'),
+    tipo: col('Type'), pot: col('Nominal Power', 'Max station power'), imp: col('Total Amount CPO'), dur: col('Session duration'), st: col('Status'),
   };
   if (c.id < 0 || c.ini < 0 || c.kwh < 0) throw new Error(`no parece un fichero de evOS (faltan «Session ID», «Session start» o «Energy consumption»)`);
   const vistos = new Set(); const agg = new Map(); const dias = new Map(); let n = 0, dup = 0, malas = 0, kwhT = 0, impT = 0;
@@ -333,11 +333,11 @@ async function leerEvos(nombre, datos, log) {
     const imp = numEvos(r[c.imp]) || 0, seg = segundosEvos(r[c.dur]), pot = numEvos(r[c.pot]);
     const anio = +f.dia.slice(0, 4), mes = +f.dia.slice(5, 7);
     const serial = t(r, c.serial), acdc = t(r, c.acdc).toUpperCase(), dir = t(r, c.dir), cp = cpEvos(r[c.cp]);
-    const region = CCAA_CP[cp.slice(0, 2)] || t(r, c.reg);
+    const region = CCAA_CP[cp.slice(0, 2)] || t(r, c.reg), tipo = t(r, c.tipo).toUpperCase() || null;
     const punto = [serial || '¿?', dir || '¿?', cp].join(' · ');
-    const clave = [anio, mes, punto, acdc, t(r, c.cpo), t(r, c.emp)].join('\u001f');
+    const clave = [anio, mes, punto, acdc, t(r, c.cpo), t(r, c.emp), tipo].join('\u001f');
     let a = agg.get(clave);
-    if (!a) agg.set(clave, a = { anio, mes, punto, serial, ac_dc: acdc, cpo: t(r, c.cpo), empresa: t(r, c.emp), region,
+    if (!a) agg.set(clave, a = { anio, mes, punto, serial, ac_dc: acdc, cpo: t(r, c.cpo), empresa: t(r, c.emp), tipo, region,
       provincia: t(r, c.prov), ciudad: t(r, c.ciu), cp, direccion: dir, potencia: null, sesiones: 0, kwh: 0, importe: 0, segundos: 0, primera: f.ts, ultima: f.ts });
     a.sesiones++; a.kwh += kwh; a.importe += imp; a.segundos += seg;
     if (pot != null) a.potencia = Math.max(a.potencia ?? 0, pot);

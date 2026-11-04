@@ -503,9 +503,10 @@ async function exportarPuntos() {
 // ---------------------------------------------------------------- COMPARATIVA (analítico del equipo)
 function groupedChart(el, data, { fmtAxis = fComp, tipFn, onClick }) {
   if (el.clientWidth < 80) return;
-  const vals = data.flatMap((d) => [d.a, d.b, d.g]).filter((v) => v != null);
+  const vals = data.flatMap((d) => [d.a, d.b, d.c, d.g]).filter((v) => v != null);
+  const tres = data.some((d) => d.c != null);   // tercera serie opcional (celeste)
   const { svg, W, H, m, y } = frame(el, vals.length ? vals : [0], fmtAxis);
-  const band = (W - m.l - m.r) / data.length, bw = Math.min(14, band * 0.32);
+  const band = (W - m.l - m.r) / data.length, bw = Math.min(tres ? 11 : 14, band * (tres ? 0.24 : 0.32));
   const barra = (x0, v, cls) => {
     if (v == null || v === 0) return null;
     const ya = y(Math.max(0, v)), yb = y(Math.min(0, v)), h = Math.max(1, yb - ya), r = Math.min(4, h / 2, bw / 2), x1 = x0 + bw;
@@ -516,11 +517,12 @@ function groupedChart(el, data, { fmtAxis = fComp, tipFn, onClick }) {
   data.forEach((d, i) => {
     const cx = m.l + band * i + band / 2;
     const lx = svgEl('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }); lx.textContent = d.label; svg.append(lx);
-    barraSvg(svg, y, cx - bw - 4, bw + 6, d.g, 'ghost');                          // año anterior detrás de la azul
-    const pa = barra(cx - bw - 1, d.a, 'bar'), pb = barra(cx + 1, d.b, 'bar2');   // 2px de aire entre las dos
+    const x0 = tres ? cx - bw * 1.5 - 2 : cx - bw - 1;                            // 2px de aire entre barras
+    barraSvg(svg, y, x0 - 3, bw + 6, d.g, 'ghost');                              // año anterior detrás de la azul
+    const pa = barra(x0, d.a, 'bar'), pb = barra(x0 + bw + 2, d.b, 'bar2'), pc = tres ? barra(x0 + 2 * bw + 4, d.c, 'bar3') : null;
     const hit = svgEl('rect', { x: cx - band / 2, y: m.t, width: band, height: H - m.t - m.b, fill: 'transparent' });
-    hit.addEventListener('mousemove', (e) => { el.classList.add('hovering'); pa?.classList.add('hl'); pb?.classList.add('hl'); showTip(e, tipFn(d)); });
-    hit.addEventListener('mouseleave', () => { el.classList.remove('hovering'); pa?.classList.remove('hl'); pb?.classList.remove('hl'); hideTip(); });
+    hit.addEventListener('mousemove', (e) => { el.classList.add('hovering'); for (const p of [pa, pb, pc]) p?.classList.add('hl'); showTip(e, tipFn(d)); });
+    hit.addEventListener('mouseleave', () => { el.classList.remove('hovering'); for (const p of [pa, pb, pc]) p?.classList.remove('hl'); hideTip(); });
     if (onClick) { hit.style.cursor = 'pointer'; hit.addEventListener('click', () => { hideTip(); onClick(d); }); }
     svg.append(hit);
   });
@@ -972,7 +974,9 @@ function mesesGenerales(d) {
     // total contra total: todo lo facturado frente a lo entregado en los puntos Public Infra (todo evOS si aún no hay maestro)
     const F = n(m.pro_kwh), E = c ? n(x.e_pi) : n(m.kwh);
     const completo = m.dias >= m.dias_mes, comparable = completo && F > 0 && E > 0;
-    return { ...m, x, label: MESES[m.mes - 1], F, E, a: F, b: E, completo, comparable, dif: comparable ? (F - E) / F * 100 : null,
+    // celeste: todo evOS con Type = PUBLIC (solo si los ficheros de ese mes ya traen el Type guardado)
+    const P = c && +x.e_public ? +x.e_public : null;
+    return { ...m, x, label: MESES[m.mes - 1], F, E, P, a: F, b: E, c: P, completo, comparable, dif: comparable ? (F - E) / F * 100 : null,
       cN: n(m.pro_neto) };
   });
 }
@@ -1040,10 +1044,12 @@ function pintarGeneral(d) {
   const tip = (m) => tipRows(`${m.label} ${d.anio}`, [
     ['Facturado', m.F == null ? 'sin facturas' : fN(m.F) + ' kWh'],
     ['Entregado (evOS)', m.E == null ? 'sin datos' : fN(m.E) + ' kWh'],
+    ...(m.P != null ? [['evOS Type Public', fN(m.P) + ' kWh']] : m.x && +m.x.e_sin_tipo ? [['evOS Type Public', 'vuelve a subir evOS de este mes']] : []),
     ['Días con evOS', `${m.dias} de ${m.dias_mes}`],
     ['Diferencia', m.comparable ? `${fN(m.F - m.E)} kWh · ${fN(m.dif, 1)} %` : m.F && m.E ? 'mes incompleto en evOS' : '—'],
   ]);
   const irMes = (m) => { if (conCruce(d) && (m.F || m.E)) irACruce(m.mes); };
+  $('#lgPublic').classList.toggle('hide', !meses.some((m) => m.P != null));
   groupedChart($('#chGen'), meses, { tipFn: tip, onClick: conCruce(d) ? irMes : null });
   lineChart($('#chGenPct'), meses.map((m) => ({ ...m, value: m.dif })), { fmtAxis: (v) => fN(v, 0) + ' %', fmtEnd: (v) => fN(v, 1) + ' %', tipFn: tip, onClick: conCruce(d) ? irMes : null });
   // avisos
@@ -1051,6 +1057,8 @@ function pintarGeneral(d) {
   const av = [];
   const bajo = comp.filter((m) => m.dif < 0);
   if (bajo.length > 2) av.push(['alta', `En <b>${bajo.length} de ${comp.length}</b> meses comparables evOS entrega <b>más</b> energía de la facturada (de ${fN(-Math.max(...bajo.map((m) => m.dif)), 0)} % a ${fN(-Math.min(...bajo.map((m) => m.dif)), 0)} % más). Lo normal sería lo contrario: probablemente faltan facturas (por ejemplo, las de media tensión).`]);
+  const sinTipo = meses.filter((m) => m.x && +m.x.e_sin_tipo);
+  if (sinTipo.length) av.unshift(['', `Para ver la barra celeste (evOS Type Public) en <b>${sinTipo.map((m) => m.label).join(', ')}</b>, vuelve a subir sus ficheros de evOS en «Cargar datos»: se subieron antes de guardar el campo «Type» y sustituyen a los anteriores sin duplicar.`]);
   const sinMT = comp.filter((m) => !+m.pro_kwh_mt);
   if (sinMT.length) av.unshift(['', `${sinMT.length === comp.length ? 'El facturado aún' : `En <b>${sinMT.map((m) => m.label).join(', ')}</b> el facturado`} <b>no incluye facturas de media tensión</b>, pero evOS sí cuenta sus puntos: hasta cargarlas, lo entregado sale de más.`]);
   for (const m of meses) {
