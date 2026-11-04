@@ -294,7 +294,7 @@ create table if not exists public.opciones (
   descripcion text
 );
 insert into public.opciones (clave, activa, descripcion) values
-  ('refacturaciones', true, 'Si un CUPS tiene varias facturas normales (N) para el mismo periodo, solo cuenta la emitida más tarde. Las facturas de ajuste no entran en esta regla.'),
+  ('refacturaciones', true, 'Si un CUPS tiene varias facturas normales (N) para el mismo periodo, solo cuenta la emitida más tarde. Si una rectificativa (R) corrige una factura y no hay anuladora de ese periodo, la original deja de contar. Las rectificativas de los PDF de media tensión no entran en esta regla.'),
   ('copias_agrupadas', true, 'Si una misma pseudofactura aparece en varias facturas agrupadas, solo cuenta la de la agrupada más reciente.'),
   ('consumos_anomalos', true, 'Si una fila trae un consumo (total o por periodo) de más de 1.000.000 kWh, en positivo o negativo (p. ej. vuelta del contador), sus kWh no se cuentan; los importes sí.')
 on conflict (clave) do nothing;
@@ -346,6 +346,37 @@ begin
     select distinct on (cups, fecha_desde, fecha_hasta) cups, fecha_desde, fecha_hasta, id_factura, fe
     from inv order by cups, fecha_desde, fecha_hasta, fe desc nulls last, id_factura desc
   ),
+  -- 3) rectificativa sin anulación: en los Excel, la rectificativa R (columna «AJUSTE PSEUDO FACTURA» = la factura que corrige)
+  --    trae el periodo completo con el valor bueno. Si Endesa no emitió una anuladora (C) de ese mismo periodo, la N original
+  --    seguiría contando junto a la R: se marca como sustituida. Las rectificativas de los PDF de media tensión son diferencias
+  --    con signo y no entran aquí.
+  rect as (
+    select r.ajuste_de, max(r.id_factura) id_r, max(r.fecha_emision) fe, max(r.cups) cups, max(r.fecha_desde) fd, max(r.fecha_hasta) fh
+    from public.facturas r
+    where v_refact and r.estado = 'R' and r.ajuste_de is not null and coalesce(r.sheet_code, '') <> 'PDF MT'
+    group by 1
+  ),
+  -- sin «AJUSTE PSEUDO FACTURA»: la N del mismo CUPS y periodo emitida antes que la R
+  rect_p as (
+    select r.cups, r.fecha_desde fd, r.fecha_hasta fh, max(r.id_factura) id_r, max(r.fecha_emision) fe
+    from public.facturas r
+    where v_refact and r.estado = 'R' and r.ajuste_de is null and coalesce(r.sheet_code, '') <> 'PDF MT' and r.kwh > 0
+      and r.cups is not null and r.fecha_desde is not null and r.fecha_hasta is not null
+    group by 1, 2, 3
+  ),
+  r3 as (
+    select f.huella, 'Rectificada: la sustituye la rectificativa ' || x.id_r || ' (emitida ' || to_char(x.fe, 'DD/MM/YYYY') || ')' motivo
+    from public.facturas f join rect x on f.id_factura = x.ajuste_de
+    where f.estado = 'N'
+      and not exists (select 1 from public.facturas c where c.estado in ('C', 'A') and c.cups = x.cups
+                      and c.fecha_desde is not distinct from x.fd and c.fecha_hasta is not distinct from x.fh)
+    union
+    select f.huella, 'Rectificada: la sustituye la rectificativa ' || x.id_r || ' (emitida ' || to_char(x.fe, 'DD/MM/YYYY') || ')' motivo
+    from public.facturas f join rect_p x on f.cups = x.cups and f.fecha_desde = x.fd and f.fecha_hasta = x.fh
+    where f.estado = 'N' and f.fecha_emision < x.fe
+      and not exists (select 1 from public.facturas c where c.estado in ('C', 'A') and c.cups = x.cups
+                      and c.fecha_desde = x.fd and c.fecha_hasta = x.fh)
+  ),
   r2 as (
     select f.huella, 'Refacturada: la sustituye la factura ' || g.id_factura || ' (emitida ' || to_char(g.fe, 'DD/MM/YYYY') || ')' motivo
     from public.facturas f
@@ -354,7 +385,7 @@ begin
     where i.id_factura <> g.id_factura
   ),
   marcas as (
-    select huella, string_agg(motivo, ' · ') motivo from (select * from r1 union all select * from r2) x group by huella
+    select huella, string_agg(motivo, ' · ') motivo from (select * from r1 union all select * from r2 union all select * from r3) x group by huella
   )
   update public.facturas f
      set sustituida = m.huella is not null, motivo_sust = m.motivo
@@ -1377,3 +1408,4 @@ notify pgrst, 'reload schema';
 select public.recalcular_correcciones();
 -- Rellena la caché del dashboard
 select public.refrescar_cache();
+
