@@ -991,7 +991,8 @@ returns jsonb language sql stable as $$
     where base = 'consumo' and anio = p_anio group by mes
   ),
   pro as (   -- repartido por días del periodo facturado
-    select mes, sum(kwh) kwh, sum(neto) neto, sum(total) total from public.cache_prorr where anio = p_anio group by mes
+    select mes, sum(kwh) kwh, sum(neto) neto, sum(total) total, sum(kwh) filter (where tension = 'MT') kwh_mt
+    from public.cache_prorr where anio = p_anio group by mes
   ),
   dias as (select extract(month from dia)::int mes, count(distinct dia) dias from public.evos_dia
            where dia >= make_date(p_anio, 1, 1) and dia < make_date(p_anio + 1, 1, 1) group by 1)
@@ -1009,7 +1010,7 @@ returns jsonb language sql stable as $$
                                                     'dias', coalesce(d.dias, 0),
                                                     'dias_mes', extract(day from (make_date(p_anio, g.mes, 1) + interval '1 month' - interval '1 day'))::int,
                                                     'fact_kwh', fac.kwh, 'fact_neto', fac.neto,
-                                                    'pro_kwh', pro.kwh, 'pro_neto', pro.neto, 'pro_total', pro.total) order by g.mes)
+                                                    'pro_kwh', pro.kwh, 'pro_neto', pro.neto, 'pro_total', pro.total, 'pro_kwh_mt', pro.kwh_mt) order by g.mes)
                 from generate_series(1, 12) g(mes)
                 left join (select mes, sum(kwh) kwh, sum(sesiones) sesiones, sum(importe) importe, sum(segundos) / 3600.0 horas,
                                   sum(kwh) filter (where ac_dc = 'DC') kwh_dc, sum(sesiones) filter (where ac_dc = 'DC') ses_dc
@@ -1176,7 +1177,9 @@ returns jsonb language sql stable security definer set search_path = public as $
                 sum(ev.importe) filter (where per.cups20 is not null) e_imp_per,
                 sum(ev.kwh) filter (where ev.cups20 is null) e_sin,
                 sum(ev.kwh) filter (where ev.cups20 is not null and fc.cups20 is null) e_nofact,
-                sum(ev.kwh) filter (where ev.metodo = 'recuperado' and per.cups20 is not null) e_rec
+                sum(ev.kwh) filter (where ev.metodo = 'recuperado' and per.cups20 is not null) e_rec,
+                sum(ev.kwh) filter (where ev.metodo is not null) e_pi,                         -- puntos del maestro (Public Infra)
+                sum(ev.kwh) filter (where ev.metodo is not null and ev.cups20 is null) e_pi_sin
          from ev left join per using (cups20) left join fcups fc using (cups20) group by 1),
   sel as (select mes from comp where p_mes is null union select p_mes where p_mes is not null),
   fc_c as (select cups20, sum(kwh) f_kwh, sum(neto) f_neto from fa where mes in (select mes from sel) group by 1),
@@ -1195,9 +1198,10 @@ returns jsonb language sql stable security definer set search_path = public as $
     'dias_mes', (select dias from dias where mes = p_mes),
     'mensual', (select jsonb_agg(jsonb_build_object('mes', g.mes, 'f_per', fm.f_per, 'f_neto_per', fm.f_neto_per, 'f_tot', fm.f_tot,
                                                     'e_per', em.e_per, 'e_imp_per', em.e_imp_per, 'e_tot', em.e_tot,
-                                                    'e_sin', em.e_sin, 'e_nofact', em.e_nofact, 'e_rec', em.e_rec) order by g.mes)
+                                                    'e_sin', em.e_sin, 'e_nofact', em.e_nofact, 'e_rec', em.e_rec,
+                                                    'e_pi', em.e_pi, 'e_pi_sin', em.e_pi_sin) order by g.mes)
                 from generate_series(1, 12) g(mes) left join fm on fm.mes = g.mes left join em on em.mes = g.mes),
-    'n', jsonb_build_object('per', (select count(*) from per), 'fcups', (select count(*) from fcups), 'ecups', (select count(*) from ecups)),
+    'n', jsonb_build_object('pi', (select count(distinct coalesce(serial_cruce, punto)) from public.evos_cups), 'per', (select count(*) from per), 'fcups', (select count(*) from fcups), 'ecups', (select count(*) from ecups)),
     'cups', (select coalesce(jsonb_agg(jsonb_build_object(
         'cups20', c.cups20, 'cups', c.cups, 'direccion', c.direccion, 'puntos', c.puntos,
         'f_kwh', round(c.f_kwh::numeric, 1), 'f_neto', round(c.f_neto::numeric, 2),

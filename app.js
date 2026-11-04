@@ -969,10 +969,11 @@ function mesesGenerales(d) {
   const n = (v) => (v == null ? null : +v);
   return d.mensual.map((m, i) => {
     const x = c ? c.mensual[i] : null;
-    const F = c ? n(x.f_per) : n(m.pro_kwh), E = c ? n(x.e_per) : n(m.kwh);
+    // total contra total: todo lo facturado frente a lo entregado en los puntos Public Infra (todo evOS si aún no hay maestro)
+    const F = n(m.pro_kwh), E = c ? n(x.e_pi) : n(m.kwh);
     const completo = m.dias >= m.dias_mes, comparable = completo && F > 0 && E > 0;
     return { ...m, x, label: MESES[m.mes - 1], F, E, a: F, b: E, completo, comparable, dif: comparable ? (F - E) / F * 100 : null,
-      cN: c ? n(x.f_neto_per) : n(m.pro_neto) };
+      cN: n(m.pro_neto) };
   });
 }
 /** Qué parte de cada lado entra en la comparación (meses comparables). */
@@ -981,25 +982,26 @@ function pintarCobertura(d, meses) {
   if (!c) {
     $('#gCups').textContent = '—'; $('#gCupsSub').textContent = 'falta el maestro de puntos de recarga';
     $('#cobCruce').textContent = '';
-    $('#lsCob').innerHTML = '<p class="muted">Falta el maestro de puntos de recarga con su CUPS para comparar solo los CUPS que factura Endesa y tienen puntos en evOS. Mientras tanto se compara todo evOS con todas las facturas.</p>';
+    $('#lsCob').innerHTML = '<p class="muted">Falta el maestro de puntos de recarga: mientras tanto se compara todo evOS con todas las facturas.</p>';
     $('#tbCupsTop').innerHTML = '<tbody><tr><td class="muted">Falta el maestro de puntos de recarga con su CUPS.</td></tr></tbody>';
     return;
   }
-  $('#cobCruce').textContent = `${fN(c.cruce.con_cups)} puntos con CUPS en el maestro · ${fN(c.n.per)} CUPS en el perímetro`;
-  $('#gCups').textContent = fN(c.n.per);
-  $('#gCupsSub').textContent = `de ${fN(c.n.fcups)} CUPS facturados · ${fN(c.n.ecups)} con puntos en evOS`;
+  $('#cobCruce').textContent = `${fN(c.n.pi)} puntos Public Infra con sesiones en evOS`;
+  $('#gCups').textContent = fN(c.n.pi);
+  $('#gCupsSub').textContent = `con sesiones en evOS · de ${fN(c.cruce.puntos)} en el maestro`;
   const comp = meses.filter((m) => m.comparable);
   const S = (k) => comp.reduce((a, m) => a + (+m.x[k] || 0), 0);
-  const Et = S('e_tot'), Ep = S('e_per'), En = S('e_nofact'), Es = S('e_sin'), Er = S('e_rec'), Ft = S('f_tot'), Fp = S('f_per');
+  const Et = S('e_tot'), Ep = S('e_pi'), Es = S('e_pi_sin'), Er = S('e_rec');
+  const Ft = comp.reduce((a, m) => a + (+m.F || 0), 0), Fm = comp.reduce((a, m) => a + (+m.pro_kwh_mt || 0), 0);
   const fila = (t, v, tot, cls = '', sub = '') => `<div class="cob ${cls}"><span class="n">${t}${sub ? `<small>${sub}</small>` : ''}</span><span class="t"><span class="f" style="width:${tot ? Math.max(0, Math.min(100, v / tot * 100)) : 0}%"></span></span><span class="v">${fN(tot ? v / tot * 100 : 0, 0)} %<small>${fN(v / 1000, 0)} MWh</small></span></div>`;
   $('#lsCob').innerHTML = !comp.length ? '<p class="muted">Aún no hay meses comparables.</p>' :
     `<h4 class="mini-h">Energía entregada (evOS)</h4>` +
-    fila('En CUPS facturados', Ep, Et, '', Er ? `${fN(Er / 1000, 0)} MWh por nº de serie recuperado` : '') +
-    fila('CUPS que no factura Endesa', En, Et, 'fuera', 'otra comercializadora o distribuidora') +
-    fila('Sin CUPS en el maestro', Es, Et, 'fuera', 'nº de serie no está o no tiene CUPS') +
+    fila('Public Infra con CUPS', Ep - Es, Et, '', Er ? `incluye ${fN(Er / 1000, 0)} MWh por nº de serie recuperado` : '') +
+    fila('Public Infra sin CUPS', Es, Et, '', 'cuenta en el total aunque no se pueda emparejar con su factura') +
+    fila('Fuera del maestro', Et - Ep, Et, 'fuera', 'no es Public Infra o su nº de serie llega incompleto') +
     `<h4 class="mini-h">Energía facturada</h4>` +
-    fila('CUPS con puntos en evOS', Fp, Ft) +
-    fila('CUPS sin puntos en evOS', Ft - Fp, Ft, 'fuera', 'p. ej. consumos que no son de recarga');
+    fila('Baja tensión (BT)', Ft - Fm, Ft) +
+    fila('Media tensión (MT)', Fm, Ft, '', Fm ? '' : 'aún no hay facturas de MT');
   // CUPS con más diferencia
   const top = c.cups.map((x) => ({ ...x, dif: (+x.f_kwh || 0) - (+x.e_kwh || 0) })).sort((a, b) => Math.abs(b.dif) - Math.abs(a.dif)).slice(0, 10);
   $('#tbCupsTop').innerHTML = `<thead><tr><th>CUPS · dirección</th><th class="num">Puntos</th><th class="num">Facturado</th><th class="num">Entregado</th><th class="num">Diferencia</th></tr></thead><tbody>` +
@@ -1022,7 +1024,8 @@ function pintarGeneral(d) {
     const mas = F >= E;
     $('#gDifLbl').textContent = mas ? 'Facturado sin entregar' : 'Entregado sin facturar';
     $('#gDif').textContent = fN(Math.abs(F - E) / 1000, 1);
-    $$('#gFactSub, #gEvosSub').forEach((e) => { e.textContent = conCruce(d) ? 'MWh · perímetro cruzado' : 'MWh · meses comparables'; });
+    $('#gFactSub').textContent = 'MWh · todas las facturas · meses comparables';
+    $('#gEvosSub').textContent = conCruce(d) ? 'MWh · puntos Public Infra · meses comparables' : 'MWh · todo evOS · meses comparables';
     $('#gDifPct').innerHTML = mas ? `${fN((F - E) / F * 100, 1)} % de lo facturado` : `evOS entrega un ${fN((E - F) / F * 100, 1)} % más de lo facturado`;
     $('#gMeses').textContent = `${comp.length} ${comp.length === 1 ? 'mes comparable' : 'meses comparables'}: ${comp.map((m) => m.label).join(', ')}`;
     $('#gFact').textContent = fN(F / 1000, 1); $('#gEvos').textContent = fN(E / 1000, 1);
@@ -1047,7 +1050,9 @@ function pintarGeneral(d) {
   const media = comp.length ? comp.reduce((a, m) => a + m.dif, 0) / comp.length : null;
   const av = [];
   const bajo = comp.filter((m) => m.dif < 0);
-  if (bajo.length > 2) av.push(['alta', `En <b>${bajo.length} de ${comp.length}</b> meses comparables evOS entrega <b>más</b> energía de la facturada (de ${fN(-Math.max(...bajo.map((m) => m.dif)), 0)} % a ${fN(-Math.min(...bajo.map((m) => m.dif)), 0)} % más). Lo normal sería lo contrario: probablemente faltan facturas o evOS incluye puntos que no factura Endesa.`]);
+  if (bajo.length > 2) av.push(['alta', `En <b>${bajo.length} de ${comp.length}</b> meses comparables evOS entrega <b>más</b> energía de la facturada (de ${fN(-Math.max(...bajo.map((m) => m.dif)), 0)} % a ${fN(-Math.min(...bajo.map((m) => m.dif)), 0)} % más). Lo normal sería lo contrario: probablemente faltan facturas (por ejemplo, las de media tensión).`]);
+  const sinMT = comp.filter((m) => !+m.pro_kwh_mt);
+  if (sinMT.length) av.unshift(['', `${sinMT.length === comp.length ? 'El facturado aún' : `En <b>${sinMT.map((m) => m.label).join(', ')}</b> el facturado`} <b>no incluye facturas de media tensión</b>, pero evOS sí cuenta sus puntos: hasta cargarlas, lo entregado sale de más.`]);
   for (const m of meses) {
     const n = conCruce(d) && (m.F || m.E) ? `<a href="#tablas/cruce/${m.mes}"><b>${m.label}</b></a>` : `<b>${m.label}</b>`;
     if (bajo.length > 2 && m.dif < 0) { /* ya avisado arriba */ }
